@@ -1,0 +1,132 @@
+---
+title: "EDA"
+author: "Madalyn Young"
+date: "2025-01-27"
+output:
+    html_document:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-title: "Contents"
+    toc_float:
+      position: "left"
+execute:
+  warning: false
+  message: false
+---
+
+# Introduction
+
+
+## Data Discovery
+
+```{r}
+pacman::p_load(tidyverse, scales, dplyr, corrr, janitor, tidyr, psych, readr)
+```
+
+```{r}
+CustomerInfo <- read.csv("Data/customer_profile.csv")  
+transactionDat <- read.csv("Data/transactional_data.csv")
+custAddress <- read.csv("Data/customer_address_and_zip_mapping.csv")
+```
+
+```{r}
+AddressZip <- read.csv("/Users/u0847758/Desktop/CAP/customer_address_and_zip_mapping.csv")
+
+# Ensure AddressZip is a data frame with the correct column structure
+# Assume the relevant column to split is named 'full_address'
+
+# Split the column
+AddressZip <- AddressZip |>
+  separate(full.address, into = c("ZIP", "City", "State Name", "State Short", 
+                                  "County","Code", "Latitude", "Longitude"), sep = ",")
+
+# View the result
+print(AddressZip)
+
+AddressZip_Split[rowSums(is.na(AddressZip_Split)) > 0, ]
+
+```
+
+
+```{r}
+summary(CustomerInfo)
+```
+
+CustomerInfo has:
+
+- customer numbers: A primary group number can have multiple customer numbers, indicating that the customer is a part of the chain. SWIRE said that they treat the chain the same. So I think what we will want to do is combined the customer fields into one (if primary group is not null THEN Primary group, else customer number). We might want to look at differences in customers that have multiple outlets, so we might want to create an indicator field for the combined customer column if it has multiple outlets or not. Or count of number of outlets (segment customer groups based on how many outlets they have)
+
+
+Frequent order type: this is HOW the customer *typically* orders. They can use MyCoke Legacy, which is the original online ordering system. MyCoke360, which is the ordering system that replaced legacy. They can go through a salesrep, a call center. EDI = Electronic Data Interchange
+
+```{r}
+unique(CustomerInfo$FREQUENT_ORDER_TYPE)
+```
+
+First Delivery Date: the first time SWIRE delivered to the customer
+
+On Boarding Date:  date the customer was on boarded. Not sure what this really entails? Maybe we added them to our system as a customer and then they waited to buy. That would be an interesting thing to look at, how long between a customer was onboared versus their first delivery 
+
+cold drink channel: This is how people order cold cocacola from the customer
+
+```{r}
+unique(CustomerInfo$COLD_DRINK_CHANNEL)
+```
+
+Trade Channel: This is the type of customer they are. i.e., why type of business they own
+
+```{r}
+unique(CustomerInfo$TRADE_CHANNEL)
+```
+
+Sub_Trade Channel: This is the sub business. such as pizza, mexican, sandwiches, etc.
+```{r}
+unique(CustomerInfo$SUB_TRADE_CHANNEL)
+```
+
+Local Market partner: Local market partners are smaller customers that serve people locally and need local analysis and consistent purchase patterns (Boolean)
+
+CO2 Customer: this is the product. You can purchase CO2 which is just the gas and the customer will make the drink themselves
+
+
+Transactional Data has:
+
+```{r}
+summary(transactionDat)
+```
+
+Transaction Date: This is the date the transaction was ordered
+
+Week: just 1 to 52. what week of the year was the transaction ordered. Can we create a variable here to show how many weeks out of they year a customer orders? I wonder if there are any customers that order more than once a week?
+
+Year: this data only goes back 2 years 
+
+Customer number: this is the outlet customer number. which means that in order to join the two tables, we cannot disregard the outlet customer number in the first table
+
+Order Type: this is HOW the customer *typically* orders. They can use MyCoke Legacy, which is the original online ordering system. MyCoke360, which is the ordering system that replaced legacy. They can go through a salesrep, a call center. EDI = Electronic Data Interchange
+I wonder if we can compare this to the most used and see how often a customer deviates from their most used system of ordering. would that tell s anything? My thought is that it would tell me about less important customers
+
+Ordered cases: This is the number of cases ordered by the customer. summary stats show avg is 26.85 cases, median is 7. which means there are some outlying customers ordering significantly more. I wonder if that is consistent? I wonder if we segregate large quantity ordered customers
+
+Loaded Cases: Number of cases loaded for delivery. The average here is a little less. Median is the same. How does this differ from ordered? If we cant meet the order, where does the customer go to get the quantity needed? How often is this not equaling the ordered cases? for which type of customers is that happening (larger)?
+
+Delivered cases: This is how many cases are delivered to the customer. same questions as above...can a customer change the quantity at delivery or is this on SWIRE?
+
+"If the delivered is 0 and order is not then you can assume they did not get their order" 
+
+3 Gallons metrics the same as above.
+
+
+Customer Profile has:
+
+```{r}
+summary(custAddress)
+```
+
+Only the zip code and the full address. This data is not real. but maybe we can still use it in some capacity to find fake segmentation and patterns among customers. Might want to pull out state and county from the address into their own columns
+
+
+
+What is our train and test set going to look like? 1 for if they are a growth customer. But how do we define that? large volume currently? % growth over the last two years?
+- Create a variable that shows if customer is ordering 400 G in 2023 and 2024 and if that is a 1 in both years then they are good customers 
