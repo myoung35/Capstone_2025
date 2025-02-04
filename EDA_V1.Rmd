@@ -134,7 +134,7 @@ What is our train and test set going to look like? 1 for if they are a growth cu
 Cost Date:
 
 ```{r}
-
+summary(cost_data)
 ```
 
 
@@ -171,10 +171,71 @@ options(scipen = 999)
 cust_orders_Joined %>% 
   filter(YEAR == 2024) %>% 
   group_by(CustCombined) %>% 
-  summarize(sum_value = sum(ORDERED_GALLONS))
+  summarize(sum_value = sum(ORDERED_GALLONS)) %>% 
+  arrange(desc(sum_value))
   
+cust_orders_Joined %>% 
+  filter(YEAR == 2023) %>% 
+  group_by(CustCombined) %>% 
+  summarize(sum_value = sum(ORDERED_GALLONS)) %>% 
+  arrange(desc(sum_value))
 
 ```
 
 
-need to join an aggregated version of transaction to get the 1/0 indicator
+```{r}
+#aggregated  transaction data to join to customer table
+
+aggregatedCost <- transactionDat %>% 
+  group_by(CUSTOMER_NUMBER, YEAR) %>% 
+  summarize(orderedCases = sum(ORDERED_CASES),
+            loadedCases = sum(LOADED_CASES),
+            deliveredCases = sum(DELIVERED_CASES),
+            orderedGallons = sum(ORDERED_GALLONS),
+            loadedGallons = sum(LOADED_GALLONS),
+            deliveredGallons = sum(DELIVERED_GALLONS))
+
+
+aggregatedCost_wide <- aggregatedCost %>%
+  pivot_wider(
+    names_from = YEAR, 
+    values_from = c(orderedCases, loadedCases, deliveredCases, 
+                    orderedGallons, loadedGallons, deliveredGallons),
+    names_sep = "_"
+  )
+```
+
+
+
+```{r}
+#this is customer by outlet
+cust_orders_target <- CustomerInfo %>% 
+  left_join(aggregatedCost_wide, by = "CUSTOMER_NUMBER") %>% 
+  mutate(targetVariable = case_when(orderedGallons_2023>= 400 ~ 1, orderedGallons_2024>=400 ~ 1, TRUE ~ 0), 
+  percentChangeYOY = (orderedGallons_2024 - orderedGallons_2023)/orderedGallons_2023)
+```
+
+i looked at a customer that had a 333% growth but the number of gallons ordered was minimal. I think this would be a great target to look at to identify growth customers that might be below the 400 gallon threshold
+
+```{r}
+parent_cust_orders <- CustomerInfo %>% 
+  left_join(aggregatedCost_wide, by = "CUSTOMER_NUMBER") %>% 
+  group_by(CustCombined) %>% 
+  summarize(orderedCases_2023 = sum(orderedCases_2023),
+            orderedCases_2024 = sum(orderedCases_2024),
+            loadedCases_2023 = sum(loadedCases_2023),
+            loadedCases_2024 = sum(loadedCases_2024),
+            deliveredCases_2023 = sum(deliveredCases_2023),
+            deliveredCases_2024 = sum(deliveredCases_2024),
+            orderedGallons_2023 = sum(orderedGallons_2023),
+            orderedGallons_2024 = sum(orderedGallons_2024),
+            loadedGallons_2023 = sum(loadedGallons_2023),
+            loadedGallons_2024 = sum(loadedGallons_2024),
+            deliveredGallons_2023 = sum(deliveredGallons_2023),
+            deliveredGallons_2024 = sum(deliveredGallons_2024)) %>% 
+  mutate(targetVariable = case_when(orderedGallons_2023>= 400 ~ 1, orderedGallons_2024>=400 ~ 1,orderedCases_2023>=400 ~ 1, orderedCases_2024>=400 ~1, TRUE ~ 0), 
+  percentChangeYOY = ((orderedGallons_2024+orderedCases_2024) - (orderedGallons_2023+orderedCases_2023))/(orderedGallons_2023+orderedCases_2023))
+  
+```
+
+according to the slides, one case = one gallon. So we can make the target ariable looking at both.
