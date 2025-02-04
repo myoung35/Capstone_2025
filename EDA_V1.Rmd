@@ -27,11 +27,11 @@ pacman::p_load(tidyverse, scales, dplyr, corrr, janitor, tidyr, psych, readr)
 ```{r}
 CustomerInfo <- read.csv("Data/customer_profile.csv")  
 transactionDat <- read.csv("Data/transactional_data.csv")
-custAddress <- read.csv("Data/customer_address_and_zip_mapping.csv")
+AddressZip <- read.csv("Data/customer_address_and_zip_mapping.csv")
+cost_data <- read.csv("Data/delivery_cost_data.csv")
 ```
 
 ```{r}
-AddressZip <- read.csv("/Users/u0847758/Desktop/CAP/customer_address_and_zip_mapping.csv")
 
 # Ensure AddressZip is a data frame with the correct column structure
 # Assume the relevant column to split is named 'full_address'
@@ -44,7 +44,7 @@ AddressZip <- AddressZip |>
 # View the result
 print(AddressZip)
 
-AddressZip_Split[rowSums(is.na(AddressZip_Split)) > 0, ]
+AddressZip[rowSums(is.na(AddressZip)) > 0, ]
 
 ```
 
@@ -130,3 +130,51 @@ Only the zip code and the full address. This data is not real. but maybe we can 
 
 What is our train and test set going to look like? 1 for if they are a growth customer. But how do we define that? large volume currently? % growth over the last two years?
 - Create a variable that shows if customer is ordering 400 G in 2023 and 2024 and if that is a 1 in both years then they are good customers 
+
+Cost Date:
+
+```{r}
+
+```
+
+
+
+
+
+## Task 1 
+### create a target variable
+
+I want to create a target variable to identify all customers that are above the threshold
+
+we might want a target varible that shows if the customer grew over the two years
+
+```{r}
+CustomerInfo <- CustomerInfo %>% 
+  mutate(CustCombined = case_when(is.na(PRIMARY_GROUP_NUMBER) ~ CUSTOMER_NUMBER, TRUE ~ PRIMARY_GROUP_NUMBER) )
+```
+
+There are 30,478 unique customer numbers. Grouping by the primary customer (customers with more than one outlet) there are 19,216
+
+```{r}
+length(unique(CustomerInfo$CustCombined))
+length(unique(CustomerInfo$CUSTOMER_NUMBER))
+```
+
+
+
+```{r}
+cust_orders_Joined <- CustomerInfo %>% left_join(transactionDat, by = "CUSTOMER_NUMBER")
+
+cust_orders_Joined$TRANSACTION_DATE <- mdy(cust_orders_Joined$TRANSACTION_DATE)
+
+options(scipen = 999)
+cust_orders_Joined %>% 
+  filter(YEAR == 2024) %>% 
+  group_by(CustCombined) %>% 
+  summarize(sum_value = sum(ORDERED_GALLONS))
+  
+
+```
+
+
+need to join an aggregated version of transaction to get the 1/0 indicator
