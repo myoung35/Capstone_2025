@@ -66,7 +66,7 @@ unique(CustomerInfo$FREQUENT_ORDER_TYPE)
 
 First Delivery Date: the first time SWIRE delivered to the customer
 
-On Boarding Date:  date the customer was on boarded. Not sure what this really entails? Maybe we added them to our system as a customer and then they waited to buy. That would be an interesting thing to look at, how long between a customer was onboared versus their first delivery 
+On Boarding Date:  date the customer was on boarded. Not sure what this really entails? Maybe we added them to our system as a customer and then they waited to buy. That would be an interesting thing to look at, how long between a customer was boarded versus their first delivery 
 
 cold drink channel: This is how people order cold cocacola from the customer
 
@@ -80,7 +80,7 @@ Trade Channel: This is the type of customer they are. i.e., why type of business
 unique(CustomerInfo$TRADE_CHANNEL)
 ```
 
-Sub_Trade Channel: This is the sub business. such as pizza, mexican, sandwiches, etc.
+Sub_Trade Channel: This is the sub business. such as pizza, Mexican, sandwiches, etc.
 ```{r}
 unique(CustomerInfo$SUB_TRADE_CHANNEL)
 ```
@@ -90,7 +90,7 @@ Local Market partner: Local market partners are smaller customers that serve peo
 CO2 Customer: this is the product. You can purchase CO2 which is just the gas and the customer will make the drink themselves
 
 
-Transactional Data has:
+Transaction Data has:
 
 ```{r}
 summary(transactionDat)
@@ -146,7 +146,7 @@ summary(cost_data)
 
 I want to create a target variable to identify all customers that are above the threshold
 
-we might want a target varible that shows if the customer grew over the two years
+we might want a target variable that shows if the customer grew over the two years
 
 ```{r}
 CustomerInfo <- CustomerInfo %>% 
@@ -163,21 +163,21 @@ length(unique(CustomerInfo$CUSTOMER_NUMBER))
 
 
 ```{r}
-cust_orders_Joined <- CustomerInfo %>% left_join(transactionDat, by = "CUSTOMER_NUMBER")
+cust_orders_Joined <- CustomerInfo %>% left_join(transactionDat, by = "CUSTOMER_NUMBER") 
 
 cust_orders_Joined$TRANSACTION_DATE <- mdy(cust_orders_Joined$TRANSACTION_DATE)
 
 options(scipen = 999)
 cust_orders_Joined %>% 
-  filter(YEAR == 2024) %>% 
+  filter((YEAR == 2023) ) %>% 
   group_by(CustCombined) %>% 
-  summarize(sum_value = sum(ORDERED_GALLONS)) %>% 
+  summarize(sum_value = sum(ORDERED_GALLONS, ORDERED_CASES)) %>% 
   arrange(desc(sum_value))
   
 cust_orders_Joined %>% 
   filter(YEAR == 2023) %>% 
   group_by(CustCombined) %>% 
-  summarize(sum_value = sum(ORDERED_GALLONS)) %>% 
+  summarize(sum_value = sum(ORDERED_GALLONS, ORDERED_CASES)) %>% 
   arrange(desc(sum_value))
 
 ```
@@ -187,6 +187,7 @@ cust_orders_Joined %>%
 #aggregated  transaction data to join to customer table
 
 aggregatedCost <- transactionDat %>% 
+
   group_by(CUSTOMER_NUMBER, YEAR) %>% 
   summarize(orderedCases = sum(ORDERED_CASES),
             loadedCases = sum(LOADED_CASES),
@@ -220,6 +221,7 @@ i looked at a customer that had a 333% growth but the number of gallons ordered 
 ```{r}
 parent_cust_orders <- CustomerInfo %>% 
   left_join(aggregatedCost_wide, by = "CUSTOMER_NUMBER") %>% 
+  mutate(across(c(orderedCases_2023, orderedCases_2024, orderedGallons_2023, orderedGallons_2024), ~ replace_na(.x, 0))) %>% 
   group_by(CustCombined) %>% 
   summarize(orderedCases_2023 = sum(orderedCases_2023),
             orderedCases_2024 = sum(orderedCases_2024),
@@ -233,9 +235,67 @@ parent_cust_orders <- CustomerInfo %>%
             loadedGallons_2024 = sum(loadedGallons_2024),
             deliveredGallons_2023 = sum(deliveredGallons_2023),
             deliveredGallons_2024 = sum(deliveredGallons_2024)) %>% 
-  mutate(targetVariable = case_when(orderedGallons_2023>= 400 ~ 1, orderedGallons_2024>=400 ~ 1,orderedCases_2023>=400 ~ 1, orderedCases_2024>=400 ~1, TRUE ~ 0), 
+  mutate(
+    targetVariable = case_when(orderedGallons_2023>= 400 ~ 1, orderedGallons_2024>=400 ~ 1,orderedCases_2023>=400 ~ 1, orderedCases_2024>=400 ~1, TRUE ~ 0), 
   percentChangeYOY = ((orderedGallons_2024+orderedCases_2024) - (orderedGallons_2023+orderedCases_2023))/(orderedGallons_2023+orderedCases_2023))
   
 ```
 
-according to the slides, one case = one gallon. So we can make the target ariable looking at both.
+according to the slides, one case = one gallon. So we can make the target variable looking at both.
+
+% change for no sales in 2023 but sales in 2024 is inf - Infinite, new business
+
+```{r}
+plot(CustCombined~(orderedCases_2023+orderedGallons_2024), parent_cust_orders)
+```
+
+```{r}
+parent_cust_orders <- parent_cust_orders %>% 
+  mutate(across(c(orderedCases_2023, orderedCases_2024, orderedGallons_2023, orderedGallons_2024), ~ replace_na(.x, 0))) %>% 
+  mutate(TwoYearThresh = orderedCases_2023+orderedCases_2024+orderedGallons_2023+orderedGallons_2024)
+
+```
+
+
+```{r}
+parent_cust_orders <- parent_cust_orders %>% 
+  mutate(ThreshBins = case_when(
+    TwoYearThresh <= 800 ~ "Below Threshold",
+    TwoYearThresh >= 800 & TwoYearThresh <= 1000 ~ "Around Threshold",
+    TwoYearThresh > 1000 & TwoYearThresh <= 10000 ~ "1K-10K",
+    TwoYearThresh > 10000 & TwoYearThresh <= 50000 ~ "10K-50K",
+    TwoYearThresh > 50000 & TwoYearThresh <= 100000 ~ "50-100K",
+    TwoYearThresh > 100000 ~ "Very High") )
+
+```
+
+
+```{r}
+parent_cust_orders %>% 
+  ggplot(aes(ThreshBins)) + 
+  geom_bar()
+```
+
+We have 3914 customers that are over threshold
+Remaining 15505 are not.
+
+```{r}
+parent_cust_orders %>% 
+  filter(ThreshBins == 'Below Threshold') %>% 
+  pull(percentChangeYOY) %>%
+  is.infinite() %>%
+  sum()
+```
+There are 3189 customers that did not have business in 2023 and started with Swire in 2024 that were below the threshold. There were 3254 all together which means that there are a little under 100 customers that purchased over 800 gallons in that one year. 
+
+```{r}
+parent_cust_orders %>% 
+  filter((percentChangeYOY == Inf)) #& (ThreshBins != "Below Threshold"))
+```
+10 customers have outlets
+
+
+how to use outlet:
+# of outlets as a predictor
+# has outlet as a predictor
+# proportion of the outlets that are performing above threshold for its parent customer
