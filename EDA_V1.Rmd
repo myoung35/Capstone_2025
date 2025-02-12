@@ -223,7 +223,12 @@ parent_cust_orders <- CustomerInfo %>%
   left_join(aggregatedCost_wide, by = "CUSTOMER_NUMBER") %>% 
   mutate(across(c(orderedCases_2023, orderedCases_2024, orderedGallons_2023, orderedGallons_2024), ~ replace_na(.x, 0))) %>% 
   group_by(CustCombined) %>% 
-  summarize(orderedCases_2023 = sum(orderedCases_2023),
+  summarize(
+            FREQUENT_ORDER_TYPE = first(FREQUENT_ORDER_TYPE),
+            COLD_DRINK_CHANNEL = first(COLD_DRINK_CHANNEL),
+            TRADE_CHANNEL = first(TRADE_CHANNEL),
+            SUB_TRADE_CHANNEL = first(SUB_TRADE_CHANNEL),
+            orderedCases_2023 = sum(orderedCases_2023),
             orderedCases_2024 = sum(orderedCases_2024),
             loadedCases_2023 = sum(loadedCases_2023),
             loadedCases_2024 = sum(loadedCases_2024),
@@ -260,12 +265,19 @@ parent_cust_orders <- parent_cust_orders %>%
 ```{r}
 parent_cust_orders <- parent_cust_orders %>% 
   mutate(ThreshBins = case_when(
-    TwoYearThresh <= 800 ~ "Below Threshold",
-    TwoYearThresh >= 800 & TwoYearThresh <= 1000 ~ "Around Threshold",
-    TwoYearThresh > 1000 & TwoYearThresh <= 10000 ~ "1K-10K",
-    TwoYearThresh > 10000 & TwoYearThresh <= 50000 ~ "10K-50K",
-    TwoYearThresh > 50000 & TwoYearThresh <= 100000 ~ "50-100K",
-    TwoYearThresh > 100000 ~ "Very High") )
+    
+    TwoYearThresh < 10 ~ "Below Threshold",
+    TwoYearThresh >= 10 & TwoYearThresh <= 50 ~ "10-50",
+    TwoYearThresh >= 50 & TwoYearThresh <= 100 ~ "50-100",
+    TwoYearThresh >= 100 & TwoYearThresh <= 200 ~ "100-200",
+    TwoYearThresh >= 200 & TwoYearThresh <= 300 ~ "200-300",
+    TwoYearThresh >= 300 & TwoYearThresh <= 400 ~ "300-400",
+    TwoYearThresh >= 400 & TwoYearThresh <= 500 ~ "400 - 500",
+    TwoYearThresh >= 500 & TwoYearThresh <= 600 ~ "500-600",
+    TwoYearThresh >= 600 & TwoYearThresh <= 700 ~ "600-700",
+    TwoYearThresh >= 700 & TwoYearThresh <= 800 ~ "700-800",
+    TwoYearThresh >= 800 & TwoYearThresh <= 1000 ~ "800-1000",
+    TwoYearThresh > 1000 ~ "Above threshold") )
 
 ```
 
@@ -290,10 +302,31 @@ There are 3189 customers that did not have business in 2023 and started with Swi
 
 ```{r}
 parent_cust_orders %>% 
-  filter((percentChangeYOY == Inf)) #& (ThreshBins != "Below Threshold"))
+  filter((percentChangeYOY == Inf) )
 ```
 10 customers have outlets
 
+```{r}
+parent_cust_orders %>% 
+  filter(TwoYearThresh<= 800) %>% 
+  count(SUB_TRADE_CHANNEL) %>% 
+  arrange(n)
+  #ggplot(aes(x = fct_reorder(SUB_TRADE_CHANNEL, SUB_TRADE_CHANNEL, .fun = length)))+
+  #geom_bar()+
+  #theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+parent_cust_orders %>% 
+  filter(TwoYearThresh>= 800) %>% 
+  count(SUB_TRADE_CHANNEL) %>% 
+  arrange(n)
+```
+ FSR - Misc is full service restaurant. Both below and above thresh have the most customers in this sub group. Second largest customer in above thresh is Other Outdoor Activety, which the fifth largest group in the under thresh. Meaning this group is typically over thresh? 
+ 
+ Other Licensesd Hospitatlity is third largest customer group that is below thresh, but above they are the 8th largest in above. Which means that this group is typically under thresh?
+ 
+ might be better to look at proportions....
+ 
+ There are a lot
 
 how to use outlet:
 # of outlets as a predictor
