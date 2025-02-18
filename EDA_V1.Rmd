@@ -228,6 +228,8 @@ parent_cust_orders <- CustomerInfo %>%
             COLD_DRINK_CHANNEL = first(COLD_DRINK_CHANNEL),
             TRADE_CHANNEL = first(TRADE_CHANNEL),
             SUB_TRADE_CHANNEL = first(SUB_TRADE_CHANNEL),
+            hasOutlet = first(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 0,TRUE ~1)),
+            numberOfOutlets = sum(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 0,TRUE ~1)),
             orderedCases_2023 = sum(orderedCases_2023),
             orderedCases_2024 = sum(orderedCases_2024),
             loadedCases_2023 = sum(loadedCases_2023),
@@ -251,13 +253,13 @@ according to the slides, one case = one gallon. So we can make the target variab
 % change for no sales in 2023 but sales in 2024 is inf - Infinite, new business
 
 ```{r}
-plot(CustCombined~(orderedCases_2023+orderedGallons_2024), parent_cust_orders)
+plot(CustCombined~(orderedCases_2023+orderedGallons_2023), parent_cust_orders)
 ```
 
 ```{r}
 parent_cust_orders <- parent_cust_orders %>% 
   mutate(across(c(orderedCases_2023, orderedCases_2024, orderedGallons_2023, orderedGallons_2024), ~ replace_na(.x, 0))) %>% 
-  mutate(TwoYearThresh = orderedCases_2023+orderedCases_2024+orderedGallons_2023+orderedGallons_2024)
+  mutate(TwoYearThresh = orderedCases_2023+orderedCases_2024+orderedGallons_2023+orderedGallons_2024) 
 
 ```
 
@@ -315,11 +317,30 @@ parent_cust_orders %>%
   #geom_bar()+
   #theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
+
 parent_cust_orders %>% 
   filter(TwoYearThresh>= 800) %>% 
   count(SUB_TRADE_CHANNEL) %>% 
   arrange(n)
+
+
+
+parent_cust_orders %>% 
+  filter(TwoYearThresh>= 10000) %>% 
+  group_by(CustCombined) %>%
+  #summarize(TwoYearComb = sum(TwoYearThresh), percentChangeYOY = percentChangeYOY) %>% 
+  select(CustCombined, TwoYearThresh, percentChangeYOY) %>% 
+  arrange(TwoYearThresh)
 ```
+
+179 of the 404 customers that have more than 10K in sales have a negative % growth. 10,230 customers with positive or inf % growth YOY. 8986 is negative growth. This is a 50/50 split for the most part. 
+
+```{r}
+parent_cust_orders %>% 
+  mutate(hasOutlet = case_when(Parent))
+```
+
+
  FSR - Misc is full service restaurant. Both below and above thresh have the most customers in this sub group. Second largest customer in above thresh is Other Outdoor Activety, which the fifth largest group in the under thresh. Meaning this group is typically over thresh? 
  
  Other Licensesd Hospitatlity is third largest customer group that is below thresh, but above they are the 8th largest in above. Which means that this group is typically under thresh?
@@ -328,7 +349,35 @@ parent_cust_orders %>%
  
  There are a lot
 
+```{r}
+parent_cust_orders %>% 
+  filter(orderedGallons_2024 == 0) %>% 
+  count(CustCombined)
+```
+
+
+
+```{r}
+parent_cust_orders %>% 
+  filter(TwoYearThresh>= 10000) %>% 
+  group_by(CustCombined) %>%
+  #summarize(TwoYearComb = sum(TwoYearThresh), percentChangeYOY = percentChangeYOY) %>% 
+  select(CustCombined, TwoYearThresh, percentChangeYOY) %>% 
+  arrange(percentChangeYOY)
+```
+
 how to use outlet:
 # of outlets as a predictor
 # has outlet as a predictor
 # proportion of the outlets that are performing above threshold for its parent customer
+
+
+
+Things I want to do
+- Add an has outlet column 
+  - How many outlets perform well 
+- Do proportions in the subgroups 
+- Look at if a customer is above threshold compared to their onboarding date
+- Look at local market partner (local market partner that buy only fontain )
+- look at CO2 customer 
+  
