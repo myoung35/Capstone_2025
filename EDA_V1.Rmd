@@ -21,7 +21,7 @@ execute:
 ## Data Discovery
 
 ```{r}
-pacman::p_load(tidyverse, scales, dplyr, corrr, janitor, tidyr, psych, readr)
+pacman::p_load(tidyverse, scales, dplyr, corrr, janitor, tidyr, psych, readr, lubridate)
 ```
 
 ```{r}
@@ -150,7 +150,8 @@ we might want a target variable that shows if the customer grew over the two yea
 
 ```{r}
 CustomerInfo <- CustomerInfo %>% 
-  mutate(CustCombined = case_when(is.na(PRIMARY_GROUP_NUMBER) ~ CUSTOMER_NUMBER, TRUE ~ PRIMARY_GROUP_NUMBER) )
+  mutate(CustCombined = case_when(is.na(PRIMARY_GROUP_NUMBER) ~ CUSTOMER_NUMBER, TRUE ~ PRIMARY_GROUP_NUMBER),
+         ON_BOARDING_DATE = mdy(ON_BOARDING_DATE))
 ```
 
 There are 30,478 unique customer numbers. Grouping by the primary customer (customers with more than one outlet) there are 19,216
@@ -228,8 +229,13 @@ parent_cust_orders <- CustomerInfo %>%
             COLD_DRINK_CHANNEL = first(COLD_DRINK_CHANNEL),
             TRADE_CHANNEL = first(TRADE_CHANNEL),
             SUB_TRADE_CHANNEL = first(SUB_TRADE_CHANNEL),
+            ON_BOARDING_DATE = first(ON_BOARDING_DATE),
+            LOCAL_MARKET_PARTNER = first(LOCAL_MARKET_PARTNER),
+            CO2_CUSTOMER = first(CO2_CUSTOMER),
             hasOutlet = first(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 0,TRUE ~1)),
             numberOfOutlets = sum(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 0,TRUE ~1)),
+            wellPerformingOutlet = sum(case_when((orderedGallons_2023 + orderedCases_2023) >= 400 ~ 1, (orderedGallons_2024 + orderedCases_2024) >=400 ~ 1, TRUE ~ 0)),
+            wellPerformingOutlet2YR = sum(case_when((orderedGallons_2023 +orderedGallons_2024 + orderedCases_2023 + orderedCases_2024) >=400~ 1, TRUE ~ 0)),
             orderedCases_2023 = sum(orderedCases_2023),
             orderedCases_2024 = sum(orderedCases_2024),
             loadedCases_2023 = sum(loadedCases_2023),
@@ -312,6 +318,7 @@ parent_cust_orders %>%
 parent_cust_orders %>% 
   filter(TwoYearThresh<= 800) %>% 
   count(SUB_TRADE_CHANNEL) %>% 
+  mutate(prop = n / sum(n)) %>% 
   arrange(n)
   #ggplot(aes(x = fct_reorder(SUB_TRADE_CHANNEL, SUB_TRADE_CHANNEL, .fun = length)))+
   #geom_bar()+
@@ -321,6 +328,7 @@ parent_cust_orders %>%
 parent_cust_orders %>% 
   filter(TwoYearThresh>= 800) %>% 
   count(SUB_TRADE_CHANNEL) %>% 
+  mutate(prop = n / sum(n)) %>% 
   arrange(n)
 
 
@@ -335,19 +343,15 @@ parent_cust_orders %>%
 
 179 of the 404 customers that have more than 10K in sales have a negative % growth. 10,230 customers with positive or inf % growth YOY. 8986 is negative growth. This is a 50/50 split for the most part. 
 
-```{r}
-parent_cust_orders %>% 
-  mutate(hasOutlet = case_when(Parent))
-```
 
 
- FSR - Misc is full service restaurant. Both below and above thresh have the most customers in this sub group. Second largest customer in above thresh is Other Outdoor Activety, which the fifth largest group in the under thresh. Meaning this group is typically over thresh? 
+
+ FSR - Misc is full service restaurant. Both below and above thresh have the most customers in this sub group. 21% in below thresh, 24.5% in above thresh. Second largest customer in above thresh is Other Outdoor Activety, which is 9.8% of customers, which the fifth largest group in the under thresh, or 5.4%. Meaning this group is typically over thresh? 
  
- Other Licensesd Hospitatlity is third largest customer group that is below thresh, but above they are the 8th largest in above. Which means that this group is typically under thresh?
+ Other Licensesd Hospitatlity is third largest customer group that is below thresh - 9.1%, but above they are the 8th, or 3.8% of customer base largest in above. Which means that this group is typically under thresh?
  
- might be better to look at proportions....
+ Other Dining is 14% of below versus 7% in above
  
- There are a lot
 
 ```{r}
 parent_cust_orders %>% 
@@ -371,13 +375,77 @@ how to use outlet:
 # has outlet as a predictor
 # proportion of the outlets that are performing above threshold for its parent customer
 
+How many customers have an outlet
+```{r}
 
+parent_cust_orders %>% 
+  filter(hasOutlet == 0) %>% 
+  count(CustCombined) %>% 
+  summarise(total = sum(n))
+```
+1020 customers that have an outlet. 5.3% of the custCombined
+
+```{r}
+parent_cust_orders %>% 
+  filter((hasOutlet == 0) & (wellPerformingOutlet == numberOfOutlets)) %>% 
+  count(CustCombined) %>% 
+  summarise(total = sum(n))
+```
+only 276 customers with an outlet has all their outlets as well performing. that is 27% of customers with an outlet 
+
+
+Graph the well performing outlets
+```{r}
+
+
+parent_cust_orders %>% 
+  filter(hasOutlet == 1) %>% 
+  ggplot(aes(x=numberOfOutlets, y = wellPerformingOutlet))+
+  geom_point(color = "blue", size = 3)+
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  theme_minimal()
+```
+
+```{r}
+
+parent_cust_orders %>% 
+  filter((hasOutlet == 1) & (numberOfOutlets<=200)) %>% 
+  ggplot(aes(x=numberOfOutlets, y = wellPerformingOutlet))+
+  geom_point(color = "blue", size = 3)+
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  theme_minimal()
+```
+
+
+In just the lower number of outlets <=200 I see a slight trend of more outlets = more well perfoming outlets.  However, the relationship appears to have some variability, particularly for businesses with a high number of outlets. Some have relatively few well-performing outlets despite their large network, which could indicate diminishing returns or inconsistent performance across outlets.
+
+
+
+```{r}
+parent_cust_orders %>%
+  mutate(OnboardingYear = lubridate::year(ON_BOARDING_DATE),
+         AboveThreshold = ifelse(TwoYearThresh >= 800, "Above", "Below")) %>%
+  count(OnboardingYear, AboveThreshold) %>%
+  group_by(OnboardingYear) %>%
+  mutate(prop = n / sum(n)) %>%
+  ggplot(aes(x = factor(OnboardingYear), y = prop, fill = AboveThreshold)) +
+  geom_col(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(title = "Proportion of Customers Above Threshold by Onboarding Year",
+       x = "Onboarding Year",
+       y = "Percentage",
+       fill = "Threshold Status") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  ##theme_minimal()
+```
+
+Looks like there is a trend where the more recent the year the less the customers above threshold
 
 Things I want to do
-- Add an has outlet column 
-  - How many outlets perform well 
-- Do proportions in the subgroups 
-- Look at if a customer is above threshold compared to their onboarding date
+- Add an has outlet column - DONE
+  - How many outlets perform well - DONE 
+- Do proportions in the subgroups - DONE
+- Look at if a customer is above threshold compared to their onboarding date - DONE
 - Look at local market partner (local market partner that buy only fontain )
 - look at CO2 customer 
   
