@@ -15,26 +15,25 @@ execute:
   message: false
 ---
 
-# Introduction
-
-
-## Data Discovery
+# Load Data 
 
 ```{r}
+#load packages 
 pacman::p_load(tidyverse, scales, dplyr, corrr, janitor, tidyr, psych, readr, lubridate)
 ```
 
 ```{r}
+#original data
 CustomerInfo <- read.csv("Data/customer_profile.csv")  
 transactionDat <- read.csv("Data/transactional_data.csv")
 AddressZip <- read.csv("Data/customer_address_and_zip_mapping.csv")
 cost_data <- read.csv("Data/delivery_cost_data.csv")
 ```
 
-```{r}
 
-# Ensure AddressZip is a data frame with the correct column structure
-# Assume the relevant column to split is named 'full_address'
+```{r}
+#clean the address data
+#This is code from Imogen
 
 # Split the column
 AddressZip <- AddressZip |>
@@ -42,14 +41,16 @@ AddressZip <- AddressZip |>
                                   "County","Code", "Latitude", "Longitude"), sep = ",")
 
 # View the result
-print(AddressZip)
+#print(AddressZip)
 
 AddressZip[rowSums(is.na(AddressZip)) > 0, ]
 
 ```
 
+# Basic Summary of original Data
 
 ```{r}
+#get basic stats and distributions from CustomerInfo table
 summary(CustomerInfo)
 ```
 
@@ -93,6 +94,7 @@ CO2 Customer: this is the product. You can purchase CO2 which is just the gas an
 Transaction Data has:
 
 ```{r}
+#get basic stats and distributions from Transaction table
 summary(transactionDat)
 ```
 
@@ -121,7 +123,7 @@ Delivered cases: This is how many cases are delivered to the customer. same ques
 Customer Profile has:
 
 ```{r}
-summary(custAddress)
+summary(AddressZip)
 ```
 
 Only the zip code and the full address. This data is not real. but maybe we can still use it in some capacity to find fake segmentation and patterns among customers. Might want to pull out state and county from the address into their own columns
@@ -134,27 +136,23 @@ What is our train and test set going to look like? 1 for if they are a growth cu
 Cost Date:
 
 ```{r}
+#This is a summary of the cost_data
 summary(cost_data)
 ```
 
 
+# Data manipulation - Master Data Set
 
-
-
-## Task 1 
-### create a target variable
-
-I want to create a target variable to identify all customers that are above the threshold
-
-we might want a target variable that shows if the customer grew over the two years
 
 ```{r}
+## Combine the parent and child customer number so that if the parent customer is not null return that customer number as the main customer number
+##change the onboarding date from character to date using lubridate
 CustomerInfo <- CustomerInfo %>% 
   mutate(CustCombined = case_when(is.na(PRIMARY_GROUP_NUMBER) ~ CUSTOMER_NUMBER, TRUE ~ PRIMARY_GROUP_NUMBER),
          ON_BOARDING_DATE = mdy(ON_BOARDING_DATE))
 ```
 
-There are 30,478 unique customer numbers. Grouping by the primary customer (customers with more than one outlet) there are 19,216
+There are 30,478 unique customer numbers. Grouping by the primary customer (customers with more than one outlet) there are 19,216. As shown from the code below
 
 ```{r}
 length(unique(CustomerInfo$CustCombined))
@@ -164,11 +162,15 @@ length(unique(CustomerInfo$CUSTOMER_NUMBER))
 
 
 ```{r}
+#Join customer info to the transaction data
 cust_orders_Joined <- CustomerInfo %>% left_join(transactionDat, by = "CUSTOMER_NUMBER") 
 
+#Change the transaction date to date format using lubridate
 cust_orders_Joined$TRANSACTION_DATE <- mdy(cust_orders_Joined$TRANSACTION_DATE)
 
-options(scipen = 999)
+
+options(scipen = 999) #this changes the format of the below table
+#these are just tables showing the largest customers by ordered gallons in 2023/2024
 cust_orders_Joined %>% 
   filter((YEAR == 2023) ) %>% 
   group_by(CustCombined) %>% 
@@ -176,7 +178,7 @@ cust_orders_Joined %>%
   arrange(desc(sum_value))
   
 cust_orders_Joined %>% 
-  filter(YEAR == 2023) %>% 
+  filter(YEAR == 2024) %>% 
   group_by(CustCombined) %>% 
   summarize(sum_value = sum(ORDERED_GALLONS, ORDERED_CASES)) %>% 
   arrange(desc(sum_value))
@@ -187,6 +189,9 @@ cust_orders_Joined %>%
 ```{r}
 #aggregated  transaction data to join to customer table
 
+# aggregate transaction data by customer_number and year
+#sum the ordered cases and gallons by customer number and year
+#this table is set up so each customer number has  two rows, one for 2023, one for 2024. Each column is sum of ordered cases/loaded cases. delivered cases in that year 
 aggregatedCost <- transactionDat %>% 
 
   group_by(CUSTOMER_NUMBER, YEAR) %>% 
@@ -197,6 +202,7 @@ aggregatedCost <- transactionDat %>%
             loadedGallons = sum(LOADED_GALLONS),
             deliveredGallons = sum(DELIVERED_GALLONS))
 
+#The code pivots the database that I made above to have one row per customer and a column for each cases/gallons ordered for each year
 
 aggregatedCost_wide <- aggregatedCost %>%
   pivot_wider(
@@ -207,19 +213,28 @@ aggregatedCost_wide <- aggregatedCost %>%
   )
 ```
 
-
-
-```{r}
-#this is customer by outlet
-cust_orders_target <- CustomerInfo %>% 
-  left_join(aggregatedCost_wide, by = "CUSTOMER_NUMBER") %>% 
-  mutate(targetVariable = case_when(orderedGallons_2023>= 400 ~ 1, orderedGallons_2024>=400 ~ 1, TRUE ~ 0), 
-  percentChangeYOY = (orderedGallons_2024 - orderedGallons_2023)/orderedGallons_2023)
-```
-
 i looked at a customer that had a 333% growth but the number of gallons ordered was minimal. I think this would be a great target to look at to identify growth customers that might be below the 400 gallon threshold
 
 ```{r}
+#This is the main data source that I made
+#It joins the customer info table to my aggregated_wide database I made above
+#Then I replace the NA's in ordered cases and gallons with 0 so that we can calculate the % growth without error
+#I group by customer combined and then aggregate to get one row per parent customers that has
+  #Frequent order type
+  #Cold drink cannel
+  # trade channel
+  #sub trade channel
+  #on boarding date
+  #local market partner
+  #CO2 Customer
+  #has outlet -> this is a binary variable I created to say if the customer number has a parent customer then give me 1, otherwise zero
+  #numberOfOutlets -> this is the count of outlets a parent customer has (continous variable)
+  #wellPerformingOutlet -> This is if the ordered gallons/cases are above 400 in 2023 OR 2024, give me 1, then sum the number of 1's to return how many outlets are well performing
+  #wellPerfomingOutlet2YR -> this is if the ordered gallons.cases are above 800 across 2023 and 2024, then sum the number of 1's to return how many outlets are well performing across 2 years
+  # columns for each years ordered, delivered, and loaded cases and gallons -> I would be open to combining cases and gallons and creating a dummy for if they ordered cases versus gallons versus both
+  # I created a two year thresh column that adds cases and gallons for both years 
+  #TargetVariable = if the two year thresh column is above 800 then 
+  #percentChangeYOY -> takes ordered cases + gallons in 2024 minus the same for 2023 divided by 2023 ordered cases/gallons
 parent_cust_orders <- CustomerInfo %>% 
   left_join(aggregatedCost_wide, by = "CUSTOMER_NUMBER") %>% 
   mutate(across(c(orderedCases_2023, orderedCases_2024, orderedGallons_2023, orderedGallons_2024), ~ replace_na(.x, 0))) %>% 
@@ -235,7 +250,7 @@ parent_cust_orders <- CustomerInfo %>%
             hasOutlet = first(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 0,TRUE ~1)),
             numberOfOutlets = sum(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 0,TRUE ~1)),
             wellPerformingOutlet = sum(case_when((orderedGallons_2023 + orderedCases_2023) >= 400 ~ 1, (orderedGallons_2024 + orderedCases_2024) >=400 ~ 1, TRUE ~ 0)),
-            wellPerformingOutlet2YR = sum(case_when((orderedGallons_2023 +orderedGallons_2024 + orderedCases_2023 + orderedCases_2024) >=400~ 1, TRUE ~ 0)),
+            wellPerformingOutlet2YR = sum(case_when((orderedGallons_2023 +orderedGallons_2024 + orderedCases_2023 + orderedCases_2024) >=800~ 1, TRUE ~ 0)),
             orderedCases_2023 = sum(orderedCases_2023),
             orderedCases_2024 = sum(orderedCases_2024),
             loadedCases_2023 = sum(loadedCases_2023),
@@ -247,30 +262,28 @@ parent_cust_orders <- CustomerInfo %>%
             loadedGallons_2023 = sum(loadedGallons_2023),
             loadedGallons_2024 = sum(loadedGallons_2024),
             deliveredGallons_2023 = sum(deliveredGallons_2023),
-            deliveredGallons_2024 = sum(deliveredGallons_2024)) %>% 
+            deliveredGallons_2024 = sum(deliveredGallons_2024),
+            TwoYearThresh = orderedCases_2023+orderedCases_2024+orderedGallons_2023+orderedGallons_2024) %>% 
   mutate(
     targetVariable = case_when(orderedGallons_2023>= 400 ~ 1, orderedGallons_2024>=400 ~ 1,orderedCases_2023>=400 ~ 1, orderedCases_2024>=400 ~1, TRUE ~ 0), 
   percentChangeYOY = ((orderedGallons_2024+orderedCases_2024) - (orderedGallons_2023+orderedCases_2023))/(orderedGallons_2023+orderedCases_2023))
   
 ```
 
+
 according to the slides, one case = one gallon. So we can make the target variable looking at both.
 
 % change for no sales in 2023 but sales in 2024 is inf - Infinite, new business
 
+
+The below plot shows the distribution of ordered gallons/cases by unique customer numbers
 ```{r}
 plot(CustCombined~(orderedCases_2023+orderedGallons_2023), parent_cust_orders)
 ```
 
-```{r}
-parent_cust_orders <- parent_cust_orders %>% 
-  mutate(across(c(orderedCases_2023, orderedCases_2024, orderedGallons_2023, orderedGallons_2024), ~ replace_na(.x, 0))) %>% 
-  mutate(TwoYearThresh = orderedCases_2023+orderedCases_2024+orderedGallons_2023+orderedGallons_2024) 
-
-```
-
 
 ```{r}
+#this code creates bins to visualize the twoyearthresh distribution. I changed it a lot so if we want to use any type of binning I think we need to decide how we want that to look
 parent_cust_orders <- parent_cust_orders %>% 
   mutate(ThreshBins = case_when(
     
@@ -290,16 +303,18 @@ parent_cust_orders <- parent_cust_orders %>%
 ```
 
 
+The below graph shows 50-200 ordered gallons is the majority of below threshold (800) orders
 ```{r}
 parent_cust_orders %>% 
   ggplot(aes(ThreshBins)) + 
   geom_bar()
 ```
-
+This comment was made when my binning of above below was based on the 800
 We have 3914 customers that are over threshold
 Remaining 15505 are not.
 
 ```{r}
+#This also would make more sense if my below threshold was less than 800 still. 
 parent_cust_orders %>% 
   filter(ThreshBins == 'Below Threshold') %>% 
   pull(percentChangeYOY) %>%
@@ -308,13 +323,18 @@ parent_cust_orders %>%
 ```
 There are 3189 customers that did not have business in 2023 and started with Swire in 2024 that were below the threshold. There were 3254 all together which means that there are a little under 100 customers that purchased over 800 gallons in that one year. 
 
+
+This table is all the customers that did not have business in 2023 and ordered in 2024
+Want to replace with 100%
 ```{r}
 parent_cust_orders %>% 
   filter((percentChangeYOY == Inf) )
 ```
 10 customers have outlets
 
+The below tables show proportions in the sub trade channel for above and below the two year threshold
 ```{r}
+
 parent_cust_orders %>% 
   filter(TwoYearThresh<= 800) %>% 
   count(SUB_TRADE_CHANNEL) %>% 
@@ -330,9 +350,16 @@ parent_cust_orders %>%
   count(SUB_TRADE_CHANNEL) %>% 
   mutate(prop = n / sum(n)) %>% 
   arrange(n)
+```
 
+ FSR - Misc is full service restaurant. Both below and above thresh have the most customers in this sub group. 21% in below thresh, 24.5% in above thresh. Second largest customer in above thresh is Other Outdoor Activety, which is 9.8% of customers, which the fifth largest group in the under thresh, or 5.4%. Meaning this group is typically over thresh? 
+ 
+ Other Licensesd Hospitatlity is third largest customer group that is below thresh - 9.1%, but above they are the 8th, or 3.8% of customer base largest in above. Which means that this group is typically under thresh?
+ 
+ Other Dining is 14% of below versus 7% in above
 
-
+this table shows the largest customers and their growth % yoy
+```{r}
 parent_cust_orders %>% 
   filter(TwoYearThresh>= 10000) %>% 
   group_by(CustCombined) %>%
@@ -343,24 +370,7 @@ parent_cust_orders %>%
 
 179 of the 404 customers that have more than 10K in sales have a negative % growth. 10,230 customers with positive or inf % growth YOY. 8986 is negative growth. This is a 50/50 split for the most part. 
 
-
-
-
- FSR - Misc is full service restaurant. Both below and above thresh have the most customers in this sub group. 21% in below thresh, 24.5% in above thresh. Second largest customer in above thresh is Other Outdoor Activety, which is 9.8% of customers, which the fifth largest group in the under thresh, or 5.4%. Meaning this group is typically over thresh? 
- 
- Other Licensesd Hospitatlity is third largest customer group that is below thresh - 9.1%, but above they are the 8th, or 3.8% of customer base largest in above. Which means that this group is typically under thresh?
- 
- Other Dining is 14% of below versus 7% in above
- 
-
-```{r}
-parent_cust_orders %>% 
-  filter(orderedGallons_2024 == 0) %>% 
-  count(CustCombined)
-```
-
-
-
+This is the same table as above but sorted by percent change yoy
 ```{r}
 parent_cust_orders %>% 
   filter(TwoYearThresh>= 10000) %>% 
@@ -370,10 +380,14 @@ parent_cust_orders %>%
   arrange(percentChangeYOY)
 ```
 
-how to use outlet:
-# of outlets as a predictor
-# has outlet as a predictor
-# proportion of the outlets that are performing above threshold for its parent customer
+
+```{r}
+#This is just code to see the number of customers that did not order in 2024 (6000)
+#parent_cust_orders %>% 
+ # filter(orderedGallons_2024 == 0) %>% 
+  #count(CustCombined)
+```
+
 
 How many customers have an outlet
 ```{r}
@@ -416,11 +430,10 @@ parent_cust_orders %>%
   theme_minimal()
 ```
 
-
-In just the lower number of outlets <=200 I see a slight trend of more outlets = more well perfoming outlets.  However, the relationship appears to have some variability, particularly for businesses with a high number of outlets. Some have relatively few well-performing outlets despite their large network, which could indicate diminishing returns or inconsistent performance across outlets.
-
+In just the lower number of outlets <=200 I see a slight trend of more outlets = more well performing outlets.  However, the relationship appears to have some variability, particularly for businesses with a high number of outlets. Some have relatively few well-performing outlets despite their large network, which could indicate diminishing returns or inconsistent performance across outlets.
 
 
+The below graph compares on boarding date to above/below threshold
 ```{r}
 parent_cust_orders %>%
   mutate(OnboardingYear = lubridate::year(ON_BOARDING_DATE),
@@ -441,11 +454,10 @@ parent_cust_orders %>%
 
 Looks like there is a trend where the more recent the year the less the customers above threshold
 
-Things I want to do
-- Add an has outlet column - DONE
-  - How many outlets perform well - DONE 
-- Do proportions in the subgroups - DONE
-- Look at if a customer is above threshold compared to their onboarding date - DONE
-- Look at local market partner (local market partner that buy only fontain )
+Things I want still want to do
+- Look at local market partner 
 - look at CO2 customer 
+- look at if a parent customer number is performing well but that is driven by a large number of low performing outlets
+- look at onboarding date to percentage growth
+- look at the frequent order type compared to the order type column in the transaction table to see how often they do not align. See if we want to use the order type instead? or create our own frequent order type based off the two year date we have
   
