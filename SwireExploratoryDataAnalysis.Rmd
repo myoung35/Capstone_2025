@@ -1,0 +1,1176 @@
+---
+title: "Swire Exploratory Analysis"
+author: "Imogen Holdsworth, Madalyn Young"
+date: "2025-02-12"
+output: 
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_float: yes # makes the toc move along
+    code_folding: "show"  # Use "hide" to collapse code by default
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+pacman::p_load(pacman,dplyr,caret, tidyverse,ggplot2, readxl,maps,tidyr,readr,lubridate,viridis, RColorBrewer,janitor,corrr,scales,psych, knitr, gridExtra)
+
+```
+
+
+Table of contents
+Headers and code block titles: 
+Intro : State the project goal and summarize the business and analytic problems. State the purpose of the EDA notebook and the questions about the data that you will be exploring. 
+Data description: describe the available data for the project 
+Scope of missing data and how we will fix it
+EDA visuals with titles and axis labels 
+Results where we summarize the findings
+Compilation to HTML with professional format
+Group member contribution break down to the note book 
+
+# Introduction: 
+Swire Coca-Cola is the Coca-Cola distributor for 13 states on the west coast. They service two customer groups -  red truck customers, which are local businesses Swire services through its in-house logistics system, and white truck customers – which are larger distributors that buy and sell Coca-Cola to another end customer. Swire wants to understand and segment the red truck customer group in order to identify which customers they should keep internally servicing.
+The purpose of the project is to identify customers that Swire currently works with that are or will be ordering above/below the threshold set at 400 gallons a year. The project will include developing a model to predict which customers are anticipated to grow above threshold, and include analysis on characteristics of profitable red truck customers.
+
+
+Analysis should include two groups:
+- Local Market Partners: Customers who buy only fountain drinks and no CO2, no cans and no bottles.
+- All Customers: Including those who may buy fountain drinks, CO2, cans, bottles, or any combination of these.
+
+Data Sources: Historical sales data, Customer profiles,Delivery Costs
+
+
+Alternate Route to Market (ARTM)
+ARTM refers to a cost-effective logistics strategy where certain customers are served through alternative delivery methods, primarily using third-party trucks (white trucks) instead of direct delivery by Swire Coca-Cola's own fleet (red trucks). This approach is designed to optimize operational efficiency and reduce delivery costs while maintaining service quality for smaller-volume customers or those with less frequent orders.
+Key Limitations of ARTM Deliveries:
+Lack of control over truckload (requires a full load for delivery).
+Reduced personal touch and relationship management with customers.
+
+White Truck
+Deliveries made by third-party companies (e.g., Sysco Foods) on behalf of Swire Coca-Cola. White truck deliveries are part of the ARTM strategy and are used primarily for cost-efficiency.
+Red Truck
+Deliveries made by Swire Coca-Cola's own fleet of trucks, ensuring direct customer contact and personalized service. Red trucks are typically used for larger-volume or high-touch customers.
+Local Market Partners
+Local Market Partners are smaller, regionally focused customers who primarily serve their local communities. These customers typically are characterized by their reliance on local market dynamics and consistent purchasing patterns.
+
+
+
+# Data Load
+
+## Customer Profile 
+
+This dataset provides the details information about customer orders including the onboarding and customer behavior information. 
+
+```{r Code Load 1}
+
+CustomerProfileData <- read.csv("/Users/u0847758/Desktop/CAP/customer_profile.csv")
+
+colSums(is.na(CustomerProfileData))
+
+  #PRIMARY_GROUP_NUMBER  missing 18196
+
+summary(CustomerProfileData)
+
+```
+
+### Profile Dictionary: 
+CUSTOMER_NUMBER: Unique identifier for each outlet/store
+PRIMARY_GROUP_NUMBER :A unique identifier for each retailer. Multiple customer_numbers (outlets) belonging to the same primary_group (retailer) indicate they are part of a chain.
+FREQUENT_ORDER_TYPE: Most common type of order placed by the customer (e.g., "MYCOKE LEGACY", "SALES REP").
+FIRST_DELIVERY_DATE: Date of the first delivery to the customer.
+ON_BOARDING_DATE: Date the customer was onboarded.
+COLD_DRINK_CHANNEL: General channel category for cold drink purchases (e.g., "DINING").
+TRADE_CHANNEL: Detailed channel classification (e.g., "OTHER DINING & BEVERAGE").
+SUB_TRADE_CHANNEL: Sub-classification within the trade channel (e.g., "OTHER DINING").
+LOCAL_MARKET_PARTNER: Boolean indicating if the customer is a local market partner (True/False).
+CO2_CUSTOMER: Boolean indicating if the customer purchases CO2 products (True/False).
+ZIP_CODE: ZIP code associated with the customer.
+
+Ordering Types:
+MYCOKE LEGACY: Old digital ordering platform.
+EDI: Orders places via Electronic Data Interchange, bottler sales data is fed directly into retailer system which generates payments to bottlers.
+CALL CENTER: Customer places orders via call center.
+SALES REP: Sales representative enters customer orders.
+MYCOKE 360: New digital ordering platform launched in summer 2024.
+OTHER: Less common methods of ordering.
+
+*MyCoke 360 replaced the legacy MyCoke platform to provide an improved, modernized digital ordering experience.
+
+### Missing Data Review: Customer Profile
+
+The only missing data in this dataset is the Primary Group Number, now this data is not really 'missing' some customers just do not operate as part of an outlet or chain so they do not have the primary group number that will indicate a unique retailer, as the customer number is their unique indicator. This 'missing' data will be addressed when we join the transnational data and re-aggregate. 
+
+
+
+## Transactional Data
+
+This dataset records detailed transnational information, including order quantities and delivery metrics.
+
+```{r Code Load 2}
+
+TransactionalData <- read.csv("/Users/u0847758/Desktop/CAP/transactional_data (1).csv")
+
+colSums(is.na(TransactionalData))
+  # no missing data
+
+summary(TransactionalData)
+
+```
+
+
+### Transaction Dictionary:  
+TRANSACTION_DATE: Date of the transaction (YYYY-MM-DD format).
+WEEK: Week number of the year when the transaction occurred.
+YEAR: Year of the transaction.
+CUSTOMER_NUMBER: Unique identifier for the customer.
+ORDER_TYPE: Type of order placed (e.g., "SALES REP", "MYCOKE LEGACY").
+ORDERED_CASES: Number of cases ordered by the customer.
+LOADED_CASES: Number of cases loaded for delivery.
+DELIVERED_CASES: Number of cases delivered to the customer.
+ORDERED_GALLONS: Number of gallons ordered by the customer.
+LOADED_GALLONS: Number of gallons loaded for delivery.
+DELIVERED_GALLONS: Number of gallons delivered to the customer.
+
+Additional Context:
+
+Fountain drinks are measured in gallons (delivered as 'bag-in-box'), while bottles and cans are measured in cases. The total ordered, loaded, or delivered to a customer is the sum
+of gallons [fountain drinks] and cases [bottles and cans] . Cases are already converted to standard physical cases, with one standard physical case equating to one gallon, allowing
+for a direct summation of cases and gallons.
+
+**One Gallon is equivalent to one Case** 
+
+Dataset Structure:
+The data is aggregated by transaction date, not by the individual order.
+Values for ORDERED_CASES, LOADED_CASES, and DELIVERED_CASES (and their gallon counterparts) in a single row do not necessarily belong to the same order.
+
+Order Lifecycle:
+Orders may not be fully processed on the same day:
+Ordered: Reflects orders created on the specific TRANSACTION_DATE.
+Loaded: Represents the quantity loaded for delivery, which may belong to orders placed on previous days.
+Delivered: Indicates the quantity delivered, which may correspond to orders created or loaded on earlier dates.
+
+
+Example Scenario:
+An order placed on January 1st may appear under ORDERED_CASES for January 1st.
+The same order might be loaded for delivery on January 2nd and delivered on January 3rd.
+In this dataset, the rows are grouped by TRANSACTION_DATE, so all three events (ordered, loaded, delivered) appear in separate rows tied to their respective dates.
+
+Relevance for Analysis:
+Students should consider the asynchronous nature of these fields when analyzing fulfillment rates, delivery efficiency, or customer behavior.
+To analyze at the order level, additional data (e.g., Order IDs or time stamps) would be required.
+
+
+
+## Delivery Cost Data: 
+```{r Code Load 3}
+
+DeliveryCostData <-read_excel("/Users/u0847758/Desktop/CAP/delivery_cost_data (1).xlsx") 
+
+colSums(is.na(DeliveryCostData))
+  # no missing data
+
+summary(DeliveryCostData)
+```
+
+## Customer Address and ZIP
+
+```{r Code Load 4}
+
+AddressZIPData <- read.csv("/Users/u0847758/Desktop/CAP/customer_address_and_zip_mapping.csv")
+```
+
+The address data will need to reformatted with the correct column structure in order to complete analysis by City, Zip or Streets. 
+
+```{r Code Load 4.2}
+
+# Take the original dataset and split out the full.address column into its separate address parts
+
+# Check for any initially missing data to ensure a clean column split:
+AddressZIPData[rowSums(is.na(AddressZIPData)) > 0, ] # none are missing 
+
+# Split the column
+AddressZIPData <- AddressZIPData |>
+  separate(full.address, into = c("ZIP", "City", "State Name", "State Short", 
+                                  "County","Code", "Latitude", "Longitude"), sep = ",")
+
+# View the update
+head(AddressZIPData)
+
+# due to the original data having the additional ZIP column, we will go ahead and remove the repeated Zip column
+AddressZIPData = select(AddressZIPData, -zip)
+
+# re verify that there is no missing data
+AddressZIPData[rowSums(is.na(AddressZIPData)) > 0, ]
+
+# none missing
+
+
+```
+The Customer Address and ZIP dataset maps ZIP codes to full address information, this location information can be used in conjunction with the Customer Profile dataset to understand the location and geographical distribution of customers that SWIRE works with.
+
+
+This dataset maps ZIP codes to full address information.
+
+# Simple Data Discovery:
+
+## Customer Profile Data Discovery:  
+
+```{r Simple Data Review 1}
+# Get basic stats and distributions from the CustomerProfileData table
+summary(CustomerProfileData)
+
+```
+
+- customer numbers: A primary group number can have multiple customer numbers, indicating that the customer is a part of the chain. SWIRE said that they treat the chain the same. So I think what we will want to do is combined the customer fields into one (if primary group is not null THEN Primary group, else customer number). We might want to look at differences in customers that have multiple outlets, so we might want to create an indicator field for the combined customer column if it has multiple outlets or not. Or count of number of outlets (segment customer groups based on how many outlets they have)
+
+
+Frequent order type: this is HOW the customer *typically* orders. They can use MyCoke Legacy, which is the original online ordering system. MyCoke360, which is the ordering system that replaced legacy. They can go through a salesrep, a call center. EDI = Electronic Data Interchange
+
+
+```{r Simple Data Review 2}
+unique(CustomerProfileData$FREQUENT_ORDER_TYPE)
+
+```
+
+First Delivery Date: the first time SWIRE delivered to the customer
+
+On Boarding Date:  date the customer was on boarded. Not sure what this really entails? Maybe we added them to our system as a customer and then they waited to buy. That would be an interesting thing to look at, how long between a customer was boarded versus their first delivery 
+
+Cold drink channel: This is how people order cold cocacola from the customer
+
+```{r Simple Data Review 3}
+unique(CustomerProfileData$COLD_DRINK_CHANNEL)
+
+```
+
+Trade Channel: This is the type of customer they are. i.e., why type of business they own
+
+```{r Simple Data Review 4}
+unique(CustomerProfileData$TRADE_CHANNEL)
+```
+
+Sub_Trade Channel: This is the sub business. such as pizza, Mexican, sandwiches, etc.
+```{r Simple Data Review 5}
+unique(CustomerProfileData$SUB_TRADE_CHANNEL)
+```
+
+Local Market partner: Local market partners are smaller customers that serve people locally and need local analysis and consistent purchase patterns (Boolean)
+
+CO2 Customer: this is the product. You can purchase CO2 which is just the gas and the customer will make the drink themselves
+
+## Transaction Data Discovery:  
+```{r Simple Data Review 6}
+#get basic stats and distributions from Transaction table
+summary(TransactionalData)
+```
+
+Transaction Date: This is the date the transaction was ordered
+
+Week: just 1 to 52. what week of the year was the transaction ordered. 
+
+
+Year: The data only goes back 2 years 
+
+Customer number: The unique identifier for the customer, this column will be used to join the transnational and profile data.
+
+Order Type: this is HOW the customer *typically* orders. They can use MyCoke Legacy, which is the original online ordering system. MyCoke360, which is the ordering system that replaced legacy. They can go through a salesrep, a call center. EDI = Electronic Data Interchange
+
+
+Ordered cases: This is the number of cases ordered by the customer. Summary stats show the average is 26.85 cases (or gallons as they are interchangeable), and the Median is 7. This means there are some outlying customers ordering significantly more. 
+
+Loaded Cases: Number of cases loaded for delivery. The average here is a little less. Median is the same. 
+
+Delivered cases: This is how many cases are delivered to the customer. 
+
+"If the delivered is 0 and order is not then you can assume they did not get their order" 
+
+```{r Simple Data Review 7}
+
+summary(TransactionalData$ORDERED_CASES)
+# Ordered cases has a super high 8479.89 max compared to a median 7.00 of and a mean of 26.85,loaded cases and delivered cases is similar. delivered cases has an odd negative min, same with delivered gallons
+
+# In order to get a better sense of order amount we will need to add the ordered gallons and cases together to get the transaction line order total 
+
+TransactionalData <- TransactionalData |>
+  mutate(total_ordered = ORDERED_GALLONS + ORDERED_CASES)
+head(TransactionalData)
+
+TransactionalData |>
+  arrange(desc(total_ordered)) |>
+  head(50)
+
+ggplot(TransactionalData, aes(x = total_ordered)) +
+  geom_density(fill = "purple", alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "Density Plot of Total Orderd", x = "Ordered Total (gallons or cases")
+
+TransactionalData |>
+  arrange(desc(total_ordered)) |>
+  head(50)
+  # 8479 as the total order does not seem to be an individually odd outlier  
+```
+
+Reviewing the distribution of ordered cases for customers, it is clear it is right skewed in distribution, with the majority of customers ordering lower amounts of gallons/cases.
+
+Ordered cases has a large 8479.89 max compared to a median 7.00 of and a mean of 26.85,loaded cases and delivered cases is similar. delivered cases has an odd negative min, same with delivered gallons
+
+
+```{r Simple Data Review 8}
+
+# What does the IQR look like for the ordered cases? 
+
+Q1 <- quantile(TransactionalData$total_ordered, 0.25)
+Q3 <- quantile(TransactionalData$total_ordered, 0.75)
+IQR_value_Ordered <- Q3 - Q1
+
+# Identify outliers
+Order_Outliers <- TransactionalData|>
+  filter(total_ordered < (Q1 - 1.5 * IQR_value_Ordered) | total_ordered > (Q3 + 1.5 * IQR_value_Ordered))
+
+print(nrow(Order_Outliers))  # Count of outliers
+head(Order_Outliers)  # View some outliers
+```
+The IQR (Interquartile Range) value at 75% (third quartile, Q3) being 21.45311 means that 75% of the data falls below 21.45311 total ordered gallons, and the top 25% of order total values are above this threshold.
+
+Based on the IQR there are 96707 rows that are considered outliers, now its important to remember that at this point the Transnational data is still aggregated by the transaction, where each row is a individual transaction with a customer, so this does not reflect that 96707 unique customers fall out of the IQR, but rather 96707 transactions (when looking at the total ordered gallons plus cases) fall outside the IQR. 
+
+
+### Collapsing Transaction Data by Customer ID:
+
+To get a better sense of the ordered, delivered and loaded cases/gallons for each customer, we can collapse the data set into a summary dataset where order total is the total ordered in each year by customer.
+
+We will also start to look at how customers ordering habits relate to the threshold of 400 gallons a year set by SWIRE to indicate a customer should not be moved to white truck services. 
+
+```{r Transaction Summary by Customer 1}
+
+# Summary table for order totals by customer in each year:
+
+customer_yearly_order_totals <- TransactionalData |>
+  group_by(YEAR, CUSTOMER_NUMBER) |>
+  summarise(
+    total_cases_ordered = sum(ORDERED_CASES),
+    total_cases_delivered = sum(DELIVERED_CASES),
+    total_gallons_ordered = sum(ORDERED_GALLONS),
+    total_gallons_delivered = sum(DELIVERED_GALLONS),
+    total_cases_loaded = sum(LOADED_CASES),
+    total_gallons_loaded = sum(LOADED_GALLONS)) |>
+  # add cases and gallons together to get the totals:
+  mutate(
+    total_ordered = total_cases_ordered + total_gallons_ordered,
+    total_delivered = total_cases_delivered + total_gallons_delivered,
+    total_loaded = total_cases_loaded + total_gallons_loaded,
+    over_400 = ifelse(total_ordered > 400, 1, 0)  # Binary indicator for total > 400
+  )
+
+head(customer_yearly_order_totals)
+summary(customer_yearly_order_totals)
+
+```
+
+compare the customers that did reach the order threshold of 400 in a year, with those that did not 
+```{r Transaction Summary by Customer 2}
+
+transaction_summary_customer <- customer_yearly_order_totals |>
+  group_by(YEAR,over_400) |>
+  summarise(
+    customer_count = n(), # total of customers in each group
+    avg_ordered = mean(total_ordered),
+    avg_devliered = mean(total_delivered),
+    avg_loaded = mean(total_loaded),
+    med_ordered = median(total_ordered),
+    med_delivered = median(total_delivered),
+    med_loaded = median(total_loaded)
+    
+  )
+
+# format for EDA as a table
+kable(
+  transaction_summary_customer, 
+  digits = 2, 
+  caption = "Yearly Order Summary by Customer",
+  col.names =c("Year","Over 400 Indicator","Customer Count", "Avg Order Total", "Avg Delivered Total", "Avg Loaded Total","Median Total Ordered", "Median Total Delivered", "Median Total Loaded"))
+
+transaction_summary_customer2 <- customer_yearly_order_totals |>
+  group_by(over_400) |>
+  summarise(
+    customer_count = n(), # total of customers in each group
+    avg_ordered = mean(total_ordered),
+    avg_devliered = mean(total_delivered),
+    avg_loaded = mean(total_loaded),
+    med_ordered = median(total_ordered),
+    med_delivered = median(total_delivered),
+    med_loaded = median(total_loaded)
+    
+  )
+
+# format for EDA as a table
+kable(
+  transaction_summary_customer2, 
+  digits = 2, 
+  caption = "Yearly Order Summary by Customer",
+  col.names =c("Over 400 Indicator","Customer Count", "Avg Order Total", "Avg Delivered Total", "Avg Loaded Total","Median Total Ordered", "Median Total Delivered", "Median Total Loaded"))
+
+
+
+
+```
+This output can help us understand the distribution of the data a bit better, but it is important to keep in mind that the customer level ID summary does not account for customers who are a part of an outlet, that will be analyzed next. 
+
+From this table we can see that customers that fall under the 400 gallons ordered in a year threshold do order less on average, and that customers who fall above the threshold do order more on average, actually they order far more than 400 gallons, this could be again due to the right skew nature of the data set, but also we could hypothesize that customers a part of an outlet may order more in total than customers that don't. 
+
+
+```{r Transaction Summary by Customer 3}
+  ggplot(transaction_summary_customer, aes(x = as.factor(over_400), y = avg_ordered, fill = as.factor(over_400))) +
+  geom_col() +
+  labs(title = "Average Ordered Gallons by Customer Group", 
+       x = "Over 400 Gallons (0 = No, 1 = Yes)", 
+       y = "Average Ordered Gallons") +
+  scale_fill_manual(values = c("red", "blue"), name = "Over 400 Gallons") +
+  theme_minimal()
+  
+
+```
+It does seem obvious that customers below the order threshold of 400 gallons would order less, we will continue to explore further what kinds of traits customers have that make them more or less likely to order above/below threshold.
+
+
+
+
+
+
+# Dataset Joining:
+
+
+## Profile Dataset Aggregation
+
+First we will take the Customer Profile data, and where the customer does not have a primary group number we will use their customer number as the indicator
+
+```{r Data Joining 1}
+CustomerProfileData <- CustomerProfileData |>
+  mutate(
+    Entity_ID = case_when(
+      is.na(PRIMARY_GROUP_NUMBER) ~ CUSTOMER_NUMBER,  # If PRIMARY_GROUP_NUMBER is NA, use CUSTOMER_NUMBER
+      TRUE ~ PRIMARY_GROUP_NUMBER                     # Otherwise, use PRIMARY_GROUP_NUMBER
+    ),
+    ON_BOARDING_DATE = mdy(ON_BOARDING_DATE)         # Convert ON_BOARDING_DATE from character to Date format
+  )
+
+length(unique(CustomerProfileData$Entity_ID))
+length(unique(CustomerProfileData$CUSTOMER_NUMBER))
+```
+
+Entity ID now is the customer number for customers that don't have a primary group number, and its the primary group number for customers that are a part of an outlet. 
+
+There are 30,478 unique customer numbers. Grouping by the primary customer (customers with more than one outlet) there are 19,216.
+
+
+## Joining the aggregated profile and transaction data 
+Now we can see some customer level transaction information
+
+```{r Data Joining 2}
+
+#Join customer info to the transaction data
+customer_orders_joined <- CustomerProfileData |>
+  left_join(TransactionalData, by = "CUSTOMER_NUMBER") 
+
+#Change the transaction date to date format using lubridate
+customer_orders_joined$TRANSACTION_DATE <- mdy(customer_orders_joined$TRANSACTION_DATE)
+
+```
+
+investigate some of the largest customers by ordered gallons/cases are (in that customer now refers to either an individual customer, or the primary group that houses multiple customers a part of the same outlet -if the customer is part of an outlet)
+```{r Data Joining 3}
+
+options(scipen = 999) #this changes the format of the below table
+#these are just tables showing the largest customers by ordered gallons in 2023/2024
+customer_orders_joined |>
+  filter((YEAR == 2023) ) |>
+  group_by(Entity_ID) |>
+  summarize(sum_value = sum(ORDERED_GALLONS, ORDERED_CASES)) |>
+  arrange(desc(sum_value))
+  
+customer_orders_joined |>
+  filter(YEAR == 2024) |>
+  group_by(Entity_ID) |>
+  summarize(sum_value = sum(ORDERED_GALLONS, ORDERED_CASES)) |>
+  arrange(desc(sum_value))
+
+```
+
+## Aggregated Cost Data
+
+We have customer_yearly_order_totals already but we can work with a new dataset to pivot it wide so that each row is a customer and then we have a column for each case/gallon in that year. 
+
+```{r Data Joining 4}
+
+#aggregated  transaction data to join to customer table
+
+# aggregate transaction data by customer_number and year
+#sum the ordered cases and gallons by customer number and year
+#this table is set up so each customer number has  two rows, one for 2023, one for 2024. Each column is sum of ordered cases/loaded cases. delivered cases in that year 
+aggregated_cost <- TransactionalData |>
+  group_by(CUSTOMER_NUMBER, YEAR) |>
+  summarize(orderedCases = sum(ORDERED_CASES),
+            loadedCases = sum(LOADED_CASES),
+            deliveredCases = sum(DELIVERED_CASES),
+            orderedGallons = sum(ORDERED_GALLONS),
+            loadedGallons = sum(LOADED_GALLONS),
+            deliveredGallons = sum(DELIVERED_GALLONS))
+
+#The code pivots the database above to have one row per customer and a column for each cases/gallons ordered for each year
+aggregated_cost_wide <- aggregated_cost |>
+  pivot_wider(
+    names_from = YEAR, 
+    values_from = c(orderedCases, loadedCases, deliveredCases, 
+                    orderedGallons, loadedGallons, deliveredGallons),
+    names_sep = "_"
+  )
+```
+
+**aggregated_cost**: This dataset summarizes yearly transaction data for each customer, aggregating the total number of cases and gallons ordered, loaded, and delivered.Each row represents a unique combination of CUSTOMER_NUMBER and YEAR. It contains separate columns for: orderedCases, loadedCases, deliveredCases,orderedGallons, loadedGallons, deliveredGallons. No additional transformations or calculations beyond summing transactions.
+
+**customer_yearly_order_totals**: This dataset extends AggregatedCost by combining ordered, loaded, and delivered cases and gallons into total amounts and includes a flag for customers exceeding the set threshold.Each row represents a unique combination of YEAR and CUSTOMER_NUMBER.Contains the same transaction aggregation as aggregated_cost, but with more descriptive column names (total_cases_ordered, total_gallons_ordered, etc.). Additional Calculations:
+total_ordered = total_cases_ordered + total_gallons_ordered
+total_delivered = total_cases_delivered + total_gallons_delivered
+total_loaded = total_cases_loaded + total_gallons_loaded
+Binary Indicator (over_400): 1 if total_ordered > 400, otherwise 0.
+
+**aggregated_cost_wide**: This dataset transforms AggregatedCost into a wide format, where each year’s data is placed into separate columns instead of separate rows. Each row represents a unique CUSTOMER_NUMBER. Instead of multiple rows for different years, the years are now column headers.
+Columns are structured as:
+orderedCases_2022, orderedCases_2023
+loadedGallons_2022, loadedGallons_2023
+This format makes it easier for trend analysis and comparisons across years.
+
+
+
+## Main Data Join: Join Profile and Transaction to create a new main dataset for Analysis
+In order to complete meaningful data analysis, the customer profile data will need to be joined with the transactional data. 
+
+
+CustomerProfileData now has the entity Id in it
+
+
+```{r Data Joining 5}
+
+Main_Customer_Data <- CustomerProfileData |>
+  left_join(aggregated_cost_wide, by = "CUSTOMER_NUMBER") |>
+  mutate(across(c(orderedCases_2023, orderedCases_2024, orderedGallons_2023, orderedGallons_2024), ~ replace_na(.x, 0))) |>
+  group_by(Entity_ID) |>
+  summarize(
+            FREQUENT_ORDER_TYPE = first(FREQUENT_ORDER_TYPE),
+            COLD_DRINK_CHANNEL = first(COLD_DRINK_CHANNEL),
+            TRADE_CHANNEL = first(TRADE_CHANNEL),
+            SUB_TRADE_CHANNEL = first(SUB_TRADE_CHANNEL),
+            ON_BOARDING_DATE = first(ON_BOARDING_DATE),
+            FIRST_DELIVERY_DATE = first(FIRST_DELIVERY_DATE),
+            LOCAL_MARKET_PARTNER = first(LOCAL_MARKET_PARTNER),
+            CO2_CUSTOMER = first(CO2_CUSTOMER),
+            hasOutlet = first(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 0,TRUE ~1)),
+            numberOfOutlets = sum(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 0,TRUE ~1)),
+            wellPerformingOutlet = sum(case_when((orderedGallons_2023 + orderedCases_2023) >= 400 ~ 1, (orderedGallons_2024 + orderedCases_2024) >=400 ~ 1, TRUE ~ 0)),
+            wellPerformingOutlet2YR = sum(case_when((orderedGallons_2023 +orderedGallons_2024 + orderedCases_2023 + orderedCases_2024) >=800~ 1, TRUE ~ 0)),
+            orderedCases_2023 = sum(orderedCases_2023),
+            orderedCases_2024 = sum(orderedCases_2024),
+            loadedCases_2023 = sum(loadedCases_2023),
+            loadedCases_2024 = sum(loadedCases_2024),
+            deliveredCases_2023 = sum(deliveredCases_2023),
+            deliveredCases_2024 = sum(deliveredCases_2024),
+            orderedGallons_2023 = sum(orderedGallons_2023),
+            orderedGallons_2024 = sum(orderedGallons_2024),
+            loadedGallons_2023 = sum(loadedGallons_2023),
+            loadedGallons_2024 = sum(loadedGallons_2024),
+            deliveredGallons_2023 = sum(deliveredGallons_2023),
+            deliveredGallons_2024 = sum(deliveredGallons_2024),
+            TwoYearTotal = orderedCases_2023+orderedCases_2024+orderedGallons_2023+orderedGallons_2024) %>% 
+  mutate(
+    twoYearThresholdMet = case_when(orderedGallons_2023>= 400 ~ 1, orderedGallons_2024>=400 ~ 1,orderedCases_2023>=400 ~ 1, orderedCases_2024>=400 ~1, TRUE ~ 0), 
+  percentChangeYOY = ((orderedGallons_2024+orderedCases_2024) - (orderedGallons_2023+orderedCases_2023))/(orderedGallons_2023+orderedCases_2023))
+  
+```
+
+
+This data set joins the customer information table to the aggregated wide transcriptional data. The ordered cases and gallons that are NA are replaced with 0 to reflect that a customer did not have ordered cases/gallons, this will ensure that a % growth can be calculated without any errors. 
+
+Then the data is grouped by the Entity Id (which is the customer ID or Parent Group Id if they were apart of an outlet)
+
+The data set now consists of one row per customer (where customer is the parent if they are part of an outlet) with:
+Frequent order type
+Cold drink Channel
+trade channel
+sub trade channel
+on boarding date
+local market partner
+First Delivery Date
+CO2 Customer
+Has Outlet: Binary indicator for if the customer had a parent 
+Number of Outlets: count of outlets that share a parent customer
+WellPerformingOutlet -> Binary indicator for if ordered gallons/cases were above 400 in 2023 OR 2024(return 1), then sum the number of 1's to return how many outlets are well performing
+
+WellPerfomingOutlet2YR: Similar indicator as above but for the threshold of 800 across 2023 or 2024
+
+Two Year Total: adds cases and gallons for both years
+
+TwoYearThresholdMet = if the two year thresh column is above 800 
+
+percentChangeYOY: takes ordered cases + gallons in 2024 minus the same for 2023 divided by 2023 ordered cases/gallons
+
+And  columns for each years ordered, delivered, and loaded cases and gallons
+
+
+To improve the dataset for analysis we can combine the cases and gallons to get a better sense of total orders, and create an indicator for what type of order was placed. 
+
+```{r Data Joining 6}
+
+Main_Customer_Data <- Main_Customer_Data |>
+  mutate(
+    # Total ordered cases + gallons per year
+    total_ordered_2023 = orderedCases_2023 + orderedGallons_2023,
+    total_ordered_2024 = orderedCases_2024 + orderedGallons_2024,
+    
+    # Dummy indicators: whether cases, gallons, or both were ordered
+    orderedGallons_2023_TF = case_when(orderedGallons_2023 > 0 ~ 1, TRUE ~ 0),
+    orderedGallons_2024_TF = case_when(orderedGallons_2024 > 0 ~ 1, TRUE ~ 0),
+    orderedCases_2023_TF = case_when(orderedCases_2023 > 0 ~ 1, TRUE ~ 0),
+    orderedCases_2024_TF = case_when(orderedCases_2024 > 0 ~ 1, TRUE ~ 0),
+    
+    # Indicator if both cases and gallons were ordered in each year
+    bothOrdered_2023 = case_when(orderedCases_2023 > 0 & orderedGallons_2023 > 0 ~ 1, TRUE ~ 0),
+    bothOrdered_2024 = case_when(orderedCases_2024 > 0 & orderedGallons_2024 > 0 ~ 1, TRUE ~ 0)
+  )
+
+```
+
+
+
+```{r Data Joining 7}
+# clean the rest of the NA with 0's
+Main_Customer_Data <- Main_Customer_Data |>
+  mutate(across(c(loadedCases_2023, loadedCases_2024, loadedGallons_2023, loadedGallons_2024), ~ replace_na(.x, 0)))
+
+Main_Customer_Data <- Main_Customer_Data |>
+  mutate(across(c(deliveredCases_2023,deliveredCases_2024, deliveredGallons_2023, deliveredGallons_2024), ~ replace_na(.x, 0)))  
+
+```
+
+
+```{r Data Joining 8}
+
+# first delivery year column 
+Main_Customer_Data <- Main_Customer_Data |>
+  mutate(
+    FIRST_DELIVERY_DATE = mdy(FIRST_DELIVERY_DATE),  # Convert to Date
+    first_delivery_year = year(FIRST_DELIVERY_DATE)  # Extract Year
+  )
+```
+
+
+Thinking about the analysis, the target variable is essentially the ordered gallons a customer (or primary group) places in a single year, and how that amount compares to a threshold set by SWIRE in order to determine where customers should be placed with white truck service and removed from Swires Red Truck service. This target variable is acheived in a few ways in this current data set, the TwoYearTotal is the total of ordered gallons/cases over 2023 and 2024 for a customer, the TwoYearThresh, is an indicator of 1/2 that tells us if a customer was able to reach 800 gallons total over 23 and 24, we also have columns for total orders in 23 vs 24, finally the Year over Year growth column helps us understand the rate of growth of a customer through their order total. These columns, in combination, will help to serve as our Target Variable, where we will work to model which kinds of customers are performing above threshold and how SWIRE can utilize that information to better target customers that will perform well, or customers that should be transferred to white truck service. It is also important to note, that although a customer is not yet performing at threshold, indicators of growth with order performance increasing in the near future is also of importance to note.
+
+
+**note**Year over Year growth Inf - if a customer has no sales in 2023 but does have sales in 2024 they will show as Inf for the value of Y over Y growth. This is an indicator of new business (no order 23 but order 24), or lapsed order where the customer may have had deliveries before but not had any in 2023, there are rows that have first delivery date prior to 2023 but do not have 2023 orders. 
+
+# Joined Data Analysis
+
+## Order total visualizations 
+
+```{r Data Joining 9 plots}
+plot1 <- ggplot(Main_Customer_Data, aes(x = total_ordered_2023)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Total Orders (2023)", 
+       x = "Total Ordered Cases + Gallons (2023)", 
+       y = "Frequency") +
+  theme_minimal()
+
+
+# Log-Transformed Histogram
+# the data is quite skewed so we might want to use a log transformation to better understand the order distribution 
+# If we have customers with 0 orders, log(x) will fail, while log1p(x) handles it safely.
+
+plot2 <- ggplot(Main_Customer_Data, aes(x = log1p(total_ordered_2023))) +
+  geom_histogram(bins = 50, fill = "red", color = "black", alpha = 0.7) +
+  labs(title = "Log Distribution Total Orders (2023)", 
+       x = "Log(Total Ordered Cases + Gallons + 1)", 
+       y = "Frequency") +
+  theme_minimal()
+
+# Boxplot
+plot3 <- ggplot(Main_Customer_Data, aes(y = total_ordered_2023)) +
+  geom_boxplot(fill = "green", color = "black", alpha = 0.7) +
+  labs(title = "Boxplot of Total Orders (2023)", 
+       y = "Total Ordered Cases + Gallons") +
+  theme_minimal()
+
+grid.arrange(plot1, plot2, plot3, ncol = 2, nrow = 2)
+
+```
+
+```{r Data Joining 10 Plots}
+
+plot4 <- ggplot(Main_Customer_Data, aes(x = total_ordered_2024)) +
+  geom_histogram(bins = 30, fill = "lightblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Total Orders (2024)", 
+       x = "Total Ordered Cases + Gallons (2024)", 
+       y = "Frequency") +
+  theme_minimal()
+
+
+# Log-Transformed Histogram
+plot5 <- ggplot(Main_Customer_Data, aes(x = log1p(total_ordered_2024))) +
+  geom_histogram(bins = 50, fill = "darkred", color = "black", alpha = 0.7) +
+  labs(title = "Log Distribution Total Orders (2024)", 
+       x = "Log(Total Ordered Cases + Gallons + 1)", 
+       y = "Frequency") +
+  theme_minimal()
+
+# Boxplot
+plot6 <- ggplot(Main_Customer_Data, aes(y = total_ordered_2024)) +
+  geom_boxplot(fill = "darkgreen", color = "black", alpha = 0.7) +
+  labs(title = "Boxplot of Total Orders (2024)", 
+       y = "Total Ordered Cases + Gallons") +
+  theme_minimal()
+
+grid.arrange(plot4, plot5, plot6, ncol = 2, nrow = 2)
+
+
+```
+
+
+```{r}
+
+grid.arrange(plot2, plot5, ncol = 2, nrow = 2)
+
+plot7 <- ggplot(Main_Customer_Data, aes(x = log1p(total_ordered_2023), color = "2023")) +
+  geom_density(size = 1.2) +
+  geom_density(aes(x = log1p(total_ordered_2024), color = "2024"), size = 1.2) +
+  scale_color_manual(values = c("2023" = "red", "2024" = "darkred")) +
+  labs(title = "Log-Transformed Density Plot of Total Orders (2023 vs. 2024)", 
+       x = "Log(Total Ordered Cases + Gallons + 1)", 
+       y = "Density",
+       color = "Year") +
+  theme_minimal()
+
+grid.arrange(plot2, plot5, plot7, ncol = 2, nrow = 2)
+
+```
+
+
+
+We know that the total orders is right skewed, meaning more customers order less.
+
+Viewing the histograms 
+
+Analysis of Order Distribution: Regular vs. Log-Transformed Visualizations
+The two histograms provide critical insights into customer ordering behavior, revenue concentration, and business risks by showing the raw order distribution and its log-transformed counterpart.
+
+1️⃣ Identifying Customer Segments & Purchase Behavior
+The regular histogram (left) is highly right-skewed, showing that most customers place small orders, while a few customers have extremely large orders.
+The log-transformed histogram (right) presents a more balanced, bell-shaped distribution, revealing a clear mid-tier customer segment that was previously hidden.
+The spike at 0 in both graphs suggests that many customers placed no orders in 2023.
+🔹 Business Implications:
+
+Customer Segmentation: The business should classify customers into small, mid-tier, and high-volume buyers to tailor marketing and sales strategies.
+Revenue Concentration: If a few customers dominate sales, losing them could pose a significant business risk.
+Engagement Opportunities: Customers with zero orders might be churned, inactive, or in need of targeted incentives to encourage reordering.
+2️⃣ Outliers & Business Risk Detection
+The regular histogram obscures smaller order values, making it difficult to see differences in customer behavior.
+The log-transformed histogram compresses large values, making variability in mid-range customers more apparent.
+If only a small number of customers contribute the majority of revenue, the company could face a high customer dependency risk.
+🔹 Business Implications:
+
+Customer Concentration Risk: If a handful of accounts are responsible for most sales, the business should diversify its customer base to reduce dependency.
+Outlier Detection: Spotting extreme orders can help identify potential fraud, bulk-buying trends, or operational inefficiencies.
+Zero Order Customers: A deeper dive is needed to determine if these are inactive customers, lost clients, or seasonal buyers.
+3️⃣ Forecasting & Demand Planning
+The regular histogram suggests extreme variance in orders, making it challenging to predict future demand.
+The log-transformed histogram normalizes the data, making it more suitable for statistical modeling and forecasting.
+The distribution suggests a log-normal order pattern, which can be used to optimize inventory and marketing strategies.
+🔹 Business Implications:
+
+Improved Demand Forecasting: Using log-transformed data helps predict order volume more accurately.
+Better Inventory Management: A data-driven approach can help allocate stock more efficiently between high- and low-volume customers.
+Targeted Growth Strategies: The company should analyze whether mid-tier customers can be moved up to higher spending levels.
+
+
+
+
+- less orders of 0 in 2024
+- may want to start our modeling by looking at the statistical significance in orders between 23/24
+- further segmented analysis for customer ordering habits by year
+
+## Bin Order total amounts 
+to better understand the distribution 
+
+
+The density plot suggests that most customers fall in the lower-to-mid range of order volumes, with a few outliers at very high values.
+Smaller bin sizes for low values (where most customers are) can help differentiate small buyers.
+Larger bin sizes at high values (where fewer customers are) can prevent fragmentation.
+
+```{r}
+#this code creates bins to visualize the twoyearthresh distribution. I changed it a lot so if we want to use any type of binning I think we need to decide how we want that to look
+
+
+Main_Customer_Data <- Main_Customer_Data |>
+  mutate(ThreshBins = case_when(
+    TwoYearTotal < 10 ~ "Below Threshold",
+    TwoYearTotal >= 10 & TwoYearTotal < 50 ~ "10-49",
+    TwoYearTotal >= 50 & TwoYearTotal < 100 ~ "50-99",
+    TwoYearTotal >= 100 & TwoYearTotal < 200 ~ "100-199",
+    TwoYearTotal >= 200 & TwoYearTotal < 400 ~ "200-399",  # Larger bin since density decreases
+    TwoYearTotal >= 400 & TwoYearTotal < 600 ~ "400-599",
+    TwoYearTotal >= 600 & TwoYearTotal < 1000 ~ "600-999",
+    TwoYearTotal >= 1000 & TwoYearTotal < 1500 ~ "1000-1499",  # Account for some high-volume customers
+    TwoYearTotal >= 1500 & TwoYearTotal < 2500 ~ "1500-2499",
+    TwoYearTotal >= 2500 ~ "2500+"  # Capture extreme outliers
+  ))
+
+
+## convert bins to ordinal factor for a better plot 
+Main_Customer_Data_Bins_as_Factor <- Main_Customer_Data |>
+  mutate(ThreshBins = factor(ThreshBins, levels = c(
+    "Below Threshold", "10-49", "50-99", "100-199", 
+    "200-399", "400-599", "600-999", "1000-1499", 
+    "1500-2499", "2500+"), ordered = TRUE))
+
+# Plot with proper category ordering
+ggplot(Main_Customer_Data_Bins_as_Factor, aes(x = ThreshBins)) + 
+  geom_bar(fill = "red", color = "darkred") +
+  labs(
+    title = "Customer Distribution by Order Volume (Two-Year Threshold)",
+    x = "Order Volume Category (Two-Year Total)",
+    y = "Number of Customers"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate labels for readability
+
+```
+This distribution is not so bad, but that is due to the fact that the order bins were selected based off of the log visualizations on order amounts, so we were able to select bins that better represented the order volume of customers, we can still see that the majority of the customers fall in a lower order level bucket, the majority of customers with a two year total of orders falling between 200-400.
+
+```{r}
+  sum(Main_Customer_Data$twoYearThresholdMet)
+
+```
+
+Using the Two year threshold met column (where order total from 23 plus 24 greater or equal to 800) only 4211 customers exist (this is also aggregated to the parent customer level)
+
+
+## First Delivery Date Analysis
+
+```{r First Delivery Analysis 1 }
+
+first_delivery_analysis <- Main_Customer_Data |>
+  mutate(first_delivery_23_24 = ifelse(first_delivery_year %in% c("2023", "2024"), 1, 0))
+
+# Check counts
+table(first_delivery_analysis$first_delivery_23_24)
+
+ggplot(first_delivery_analysis, aes(x = as.factor(first_delivery_23_24), fill = as.factor(first_delivery_23_24))) +
+  geom_bar() +
+  theme_minimal() +
+  labs(title = "Number of Customers with First Order in 2023/2024",
+       x = "First Order in 2023/2024 (0 = No, 1 = Yes)",
+       y = "Customer Count",
+       fill = "First Order Indicator") +
+  scale_fill_manual(values = c("0" = "gray", "1" = "blue"))
+
+
+# Count number of customers by first order year
+customer_delivery_count <- first_delivery_analysis |>
+  count(first_delivery_year)
+
+customer_delivery_count <- customer_delivery_count |>
+  mutate(first_delivery_year = as.factor(first_delivery_year))
+
+# Bar Chart
+ggplot(customer_delivery_count, aes(x = first_delivery_year, y = n, fill = first_delivery_year))+
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Number of Customers Who Signed Up Each Year",
+       x = "Year of First Order",
+       y = "Number of Customers",
+       fill = "Sign-Up Year") 
+
+
+
+
+```
+
+
+5314 customers had their first delivery in 23 or 24 from this data, 13902 had their first delivery before with the majority of customers in this data set having first delivery date in 2018
+
+comparing first delivery year with whether customers met the two-year threshold
+
+
+```{r First Delivery Analysis 2}
+# Count customers by first delivery year and threshold performance
+
+threshold_summary <- Main_Customer_Data |>
+   mutate(first_delivery_year =factor(first_delivery_year)) |>
+  group_by(first_delivery_year, twoYearThresholdMet) |>
+  summarise(Customer_Count = n(), .groups = "drop")
+
+ggplot(threshold_summary, aes(x = first_delivery_year, y = Customer_Count, fill = as.factor(twoYearThresholdMet))) +
+  geom_bar(stat = "identity", position = "dodge") +  
+  theme_minimal() +
+  labs(title = "Threshold Performance by First Delivery Year",
+       x = "First Delivery Year",
+       y = "Number of Customers",
+       fill = "Threshold Met") +
+  scale_fill_manual(values = c("0" = "gray", "1" = "blue"), labels = c("No", "Yes")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  
+
+```
+
+
+## Sub trade channel analysis
+
+The below tables show proportions in the sub trade channel for above and below the two year threshold
+```{r Trade Channel 1}
+
+Trade_channel_table_below800 <- Main_Customer_Data |>
+  filter(TwoYearTotal <= 800) |>
+  count(SUB_TRADE_CHANNEL) |> 
+  mutate(prop = n / sum(n)) |> 
+  arrange(desc(n))
+
+# Print table using kable
+kable(Trade_channel_table_below800, digits = 7, format = "html",
+      col.names = c("Sub Trade Channel", "Customer Count", "Proportion"),
+      caption = "Customer Distribution by Sub Trade Channel ( Below 800 Two-Year Total)")
+
+
+
+Trade_channel_table_above800<- Main_Customer_Data |>
+  filter(TwoYearTotal>= 800) |>
+  count(SUB_TRADE_CHANNEL) |>
+  mutate(prop = n / sum(n)) |>
+  arrange(desc(n))
+
+kable(Trade_channel_table_above800, digits = 7, format = "html",
+      col.names = c("Sub Trade Channel", "Customer Count", "Proportion"),
+      caption = "Customer Distribution by Sub Trade Channel (Above 800 Two-Year Total)")
+
+```
+
+ FSR - Misc is full service restaurant. Both below and above thresh have the most customers in this sub group. 21% in below thresh, 24.5% in above thresh. Second largest customer in above thresh is Other Outdoor Activity, which is 9.8% of customers, which the fifth largest group in the under thresh, or 5.4%. Meaning this group is typically over thresh? 
+ 
+Other Licensed Hospitality is third largest customer group that is below thresh - 9.1%, but above they are the 8th, or 3.8% of customer base largest in above. Which means that this group is typically under thresh?
+ 
+ Other Dining is 14% of below versus 7% in above
+
+This means that Sub Trade Channel may prove to be a valuable indicator in whether a customer is to be above or below threshold. 
+
+
+
+
+
+
+
+## Year over Year analysis 
+Inf means no order in 23, but does not mean no order before 
+count of those with Inf and first devilry year
+
+```{r YoY 1}
+inf_growth_count <- Main_Customer_Data |>
+  filter(is.infinite(percentChangeYOY)) |>  # Select only customers with Inf YoY growth
+  count(first_delivery_year)  # Count by first delivery year
+
+print(inf_growth_count) 
+```
+2920 customers with "Inf" growth were customers that had a first delivery year in 2024, 3254 customers had Inf growth but had first delivery date prior to 2024 this means that they did not have orders in 2023 but had placed orders previously. 
+
+this table shows the largest customers and their growth % yoy
+```{r YoY 2}
+Main_Customer_Data |>
+  filter(TwoYearTotal>= 10000) |>
+  group_by(Entity_ID) |>
+  #summarize(TwoYearComb = sum(TwoYearThresh), percentChangeYOY = percentChangeYOY) %>% 
+  select(Entity_ID, TwoYearTotal, percentChangeYOY) |>
+  arrange(desc(TwoYearTotal))|>
+  head(10)
+```
+
+179 of the 404 customers that have more than 10K in sales have a negative % growth. 10,230 customers with positive or inf % growth YOY. 8986 is negative growth. This is a 50/50 split for the most part. 
+
+This is the same table as above but sorted by percent change yoy
+```{r YoY 3}
+Main_Customer_Data |>
+  filter(TwoYearTotal>= 10000) |>
+  group_by(Entity_ID) |>
+  #summarize(TwoYearComb = sum(TwoYearThresh), percentChangeYOY = percentChangeYOY) %>% 
+  select(Entity_ID, TwoYearTotal, percentChangeYOY) |>
+  arrange(desc(percentChangeYOY))|>
+  head(10)
+
+
+```
+
+```{r YoY 4}
+# Above 10000 order total 
+growth_summary <- Main_Customer_Data |>
+  filter(TwoYearTotal >= 10000) |>
+  mutate(
+    growth_category = case_when(
+      percentChangeYOY < 0 ~ "Negative Growth",
+      percentChangeYOY > 0 | is.infinite(percentChangeYOY) ~ "Positive or Infinite Growth",
+      TRUE ~ "No Growth") ) |>
+  count(growth_category) |>
+  mutate(percentage = n / sum(n) * 100)  # Calculate % of each category
+
+# Display the table in the EDA report
+kable(growth_summary, digits = 2, format = "html",
+      col.names = c("Growth Category", "Customer Count", "Percentage"),
+      caption = "Customer Growth Breakdown for Two-Year Sales above 10K")
+
+# Below 10000 order total
+growth_summary2 <- Main_Customer_Data |>
+  filter(TwoYearTotal <= 10000) |>
+  mutate(
+    growth_category = case_when(
+      percentChangeYOY < 0 ~ "Negative Growth",
+      percentChangeYOY > 0 | is.infinite(percentChangeYOY) ~ "Positive or Infinite Growth",
+      TRUE ~ "No Growth") ) |>
+  count(growth_category) |>
+  mutate(percentage = n / sum(n) * 100)  # Calculate % of each category
+
+# Display the table in the EDA report
+kable(growth_summary2, digits = 2, format = "html",
+      col.names = c("Growth Category", "Customer Count", "Percentage"),
+      caption = "Customer Growth Breakdown for Two-Year Sales Less than 10K")
+```
+These tables show that  Higher-Value Customers (order total ≥10K) Are More Likely to Have Positive Growth Among high-value customers (≥10K in two-year sales): 55.69% had positive or infinite growth.44.31% had negative growth.Among low-value customers (<10K in two-year sales): 51.37% had positive or infinite growth. 46.82% had negative growth. And 1.81% remained flat with no growth.
+
+It seems that with higher total sales are slightly more likely to experience positive growth. 
+
+Nearly half of all customers saw a decline in sales regardless of size -this suggests a retention issue or shifting market demand.
+
+
+Even high-value customers are not immune to churn or revenue decline.
+
+In our further analysis we may need to look into patterns with week to determine seasonality, such that if a certain time of the year results in more sales
+
+## Outlet Analysis
+
+How many customers have an outlet
+```{r Outlet 1}
+Main_Customer_Data |>
+  filter(hasOutlet == 0) |>
+  count(Entity_ID) |>
+  summarise(total = sum(n))
+
+Main_Customer_Data |>
+  filter(hasOutlet == 1) |>
+  count(Entity_ID) |>
+  summarise(total = sum(n))
+
+1020/ (18196	+ 1020)
+```
+1020 customers that have an outlet.  18196	do not have an outlet, 5.3% of the customers are outlet customers. 
+
+```{r Outlet 2 }
+Main_Customer_Data |>
+  filter((hasOutlet == 1) & (wellPerformingOutlet == numberOfOutlets)) |>
+  count(Entity_ID) |>
+  summarise(total = sum(n))
+
+296/(296 + 1020)
+
+
+```
+only 296 customers with an outlet have all  outlets as well performing. that is 27% of customers with an outlet 
+
+
+Graph the well performing outlets
+```{r Outlet 3}
+Main_Customer_Data |>
+  filter(hasOutlet == 1) %>% 
+  ggplot(aes(x=numberOfOutlets, y = wellPerformingOutlet))+
+  geom_point(color = "blue", size = 3)+
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  theme_minimal()+
+  labs(title = "Well Perfoming Outlets",
+       x = "number of outlets",
+       y = "well perfoming outlet")
+```
+
+```{r Outlet 4}
+
+Main_Customer_Data |>
+  filter((hasOutlet == 1) & (numberOfOutlets<=200)) %>% 
+  ggplot(aes(x=numberOfOutlets, y = wellPerformingOutlet))+
+  geom_point(color = "blue", size = 3)+
+  geom_smooth(method = "lm", color = "red", se = TRUE) +
+  theme_minimal() +
+  labs(title = "Customer Performance with less than 200 Outlets",
+       x = "number of outlets",
+       y = "well perfoming outlet")
+  
+```
+
+In just the lower number of outlets <=200 there is a slight trend of more outlets = more well performing outlets.  However, the relationship appears to have some variability, particularly for businesses with a high number of outlets. Some have relatively few well-performing outlets despite their large network, which could indicate diminishing returns or inconsistent performance across outlets.
+
+## C02 Analysis:
+
+```{r Co2 1}
+Main_Customer_Data |>
+  count(CO2_CUSTOMER)
+```
+
+```{r Co2 2}
+co2_order_summary <- Main_Customer_Data |>
+  group_by(CO2_CUSTOMER) |>
+  summarise(
+    AVG_ORDERED_2023 = mean(total_ordered_2023),
+    AVG_ORDERED_2024 = mean(total_ordered_2024),
+    MEDIAN_ORDERED_2023 = median(total_ordered_2023),
+    MEDIAN_ORDERED_2024 = median(total_ordered_2024), 
+    .groups = "drop"
+  )
+
+kable(co2_order_summary, digits = 4, format = "html",
+      col.names = c("CO2_CUSTOMER", "AVG_ORDERED_2023", "AVG_ORDERED_2024", "MEDIAN_ORDERED_2023", "MEDIAN_ORDERED_2024"),
+     caption = "C02 Customer Breakdown" )
+
+```
+
+
+```{r Co2 3}
+co2_threshold_summary <- Main_Customer_Data |>
+  group_by(CO2_CUSTOMER, twoYearThresholdMet) |>
+  summarise(Customer_Count = n(), .groups = "drop")
+
+print(co2_threshold_summary)  # View summary table
+
+```
+
+```{r Co2 4}
+ggplot(co2_threshold_summary, aes(x = CO2_CUSTOMER, y = Customer_Count, fill = as.factor(twoYearThresholdMet))) +
+  geom_bar(stat = "identity", position = "dodge") + 
+  theme_minimal() +
+  labs(title = "CO2 vs. Non-CO2 Customers Meeting Threshold",
+       x = "CO2 Customer Status",
+       y = "Number of Customers",
+       fill = "Threshold Met") +
+  scale_fill_manual(values = c("0" = "gray", "1" = "red"), labels = c("No", "Yes"))
+
+```
+
+
+```{r Co2 5}
+# Count CO₂ vs. Non-CO₂ customers among those who met the threshold
+
+co2_threshold_distribution <- Main_Customer_Data |>
+  filter(twoYearThresholdMet == 1) |>  # Only customers who met the threshold
+  count(CO2_CUSTOMER) |> 
+  mutate(prop = n / sum(n) * 100)  # Convert percentages
+
+
+kable(co2_threshold_distribution,
+      caption = "CO2 customer distribution for above threshold orders" )
+
+```
+
+Pretty even distribution for CO2 and non CO2 customers that perform above threshold, this may not serve as a helpful indicator for customer ordering behavior. 
+
+
