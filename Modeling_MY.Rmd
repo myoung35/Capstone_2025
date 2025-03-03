@@ -1,0 +1,222 @@
+---
+title: "Modeling"
+author: "Madalyn Young"
+date: "2025-03-03"
+output: 
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_float: yes # makes the toc move along
+    code_folding: "show"  # Use "hide" to collapse code by default
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r}
+pacman::p_load(tidyverse, scales, dplyr, corrr, janitor, tidyr, psych, readr, lubridate, rpart)
+```
+
+# Load Data
+
+```{r}
+#original data
+CustomerProfileData <- read.csv("Data/customer_profile.csv")  
+TransactionalData <- read.csv("Data/transactional_data.csv")
+AddressZipData <- read.csv("Data/customer_address_and_zip_mapping.csv")
+DeliveryCostData <- read.csv("Data/delivery_cost_data.csv")
+```
+
+
+```{r}
+#clean the address data
+#This is code from Imogen
+
+# Split the column
+AddressZipData <- AddressZipData |>
+  separate(full.address, into = c("ZIP", "City", "State Name", "State Short", 
+                                  "County","Code", "Latitude", "Longitude"), sep = ",")
+
+# View the result
+#print(AddressZip)
+
+AddressZipData[rowSums(is.na(AddressZipData)) > 0, ]
+
+```
+
+```{r Data Joining 1}
+CustomerProfileData <- CustomerProfileData |>
+  mutate(
+    Entity_ID = case_when(
+      is.na(PRIMARY_GROUP_NUMBER) ~ CUSTOMER_NUMBER,  # If PRIMARY_GROUP_NUMBER is NA, use CUSTOMER_NUMBER
+      TRUE ~ PRIMARY_GROUP_NUMBER                     # Otherwise, use PRIMARY_GROUP_NUMBER
+    ),
+    ON_BOARDING_DATE = mdy(ON_BOARDING_DATE)         # Convert ON_BOARDING_DATE from character to Date format
+  )
+
+
+```
+
+
+
+```{r Data Joining 2}
+
+#Join customer info to the transaction data
+customer_orders_joined <- CustomerProfileData |>
+  left_join(TransactionalData, by = "CUSTOMER_NUMBER") 
+
+#Change the transaction date to date format using lubridate
+customer_orders_joined$TRANSACTION_DATE <- mdy(customer_orders_joined$TRANSACTION_DATE)
+
+```
+
+
+
+```{r Data Joining 4}
+
+#aggregated  transaction data to join to customer table
+
+# aggregate transaction data by customer_number and year
+#sum the ordered cases and gallons by customer number and year
+#this table is set up so each customer number has  two rows, one for 2023, one for 2024. Each column is sum of ordered cases/loaded cases. delivered cases in that year 
+aggregated_cost <- TransactionalData |>
+  group_by(CUSTOMER_NUMBER, YEAR) |>
+  summarize(orderedCases = sum(ORDERED_CASES),
+            loadedCases = sum(LOADED_CASES),
+            deliveredCases = sum(DELIVERED_CASES),
+            orderedGallons = sum(ORDERED_GALLONS),
+            loadedGallons = sum(LOADED_GALLONS),
+            deliveredGallons = sum(DELIVERED_GALLONS))
+
+#The code pivots the database above to have one row per customer and a column for each cases/gallons ordered for each year
+aggregated_cost_wide <- aggregated_cost |>
+  pivot_wider(
+    names_from = YEAR, 
+    values_from = c(orderedCases, loadedCases, deliveredCases, 
+                    orderedGallons, loadedGallons, deliveredGallons),
+    names_sep = "_"
+  )
+```
+
+
+
+```{r Data Joining 5}
+
+Main_Customer_Data <- CustomerProfileData |>
+  left_join(aggregated_cost_wide, by = "CUSTOMER_NUMBER") |>
+  mutate(across(c(orderedCases_2023, orderedCases_2024, orderedGallons_2023, orderedGallons_2024), ~ replace_na(.x, 0))) |>
+  group_by(Entity_ID) |>
+  summarize(
+            FREQUENT_ORDER_TYPE = first(FREQUENT_ORDER_TYPE),
+            COLD_DRINK_CHANNEL = first(COLD_DRINK_CHANNEL),
+            TRADE_CHANNEL = first(TRADE_CHANNEL),
+            SUB_TRADE_CHANNEL = first(SUB_TRADE_CHANNEL),
+            ON_BOARDING_DATE = first(ON_BOARDING_DATE),
+            FIRST_DELIVERY_DATE = first(FIRST_DELIVERY_DATE),
+            LOCAL_MARKET_PARTNER = first(LOCAL_MARKET_PARTNER),
+            CO2_CUSTOMER = first(CO2_CUSTOMER),
+            hasOutlet = first(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 0,TRUE ~1)),
+            numberOfOutlets = sum(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 0,TRUE ~1)),
+            wellPerformingOutlet = sum(case_when((orderedGallons_2023 + orderedCases_2023) >= 400 ~ 1, (orderedGallons_2024 + orderedCases_2024) >=400 ~ 1, TRUE ~ 0)),
+            wellPerformingOutlet2YR = sum(case_when((orderedGallons_2023 +orderedGallons_2024 + orderedCases_2023 + orderedCases_2024) >=800~ 1, TRUE ~ 0)),
+            orderedCases_2023 = sum(orderedCases_2023),
+            orderedCases_2024 = sum(orderedCases_2024),
+            loadedCases_2023 = sum(loadedCases_2023),
+            loadedCases_2024 = sum(loadedCases_2024),
+            deliveredCases_2023 = sum(deliveredCases_2023),
+            deliveredCases_2024 = sum(deliveredCases_2024),
+            orderedGallons_2023 = sum(orderedGallons_2023),
+            orderedGallons_2024 = sum(orderedGallons_2024),
+            loadedGallons_2023 = sum(loadedGallons_2023),
+            loadedGallons_2024 = sum(loadedGallons_2024),
+            deliveredGallons_2023 = sum(deliveredGallons_2023),
+            deliveredGallons_2024 = sum(deliveredGallons_2024),
+            TwoYearTotal = orderedCases_2023+orderedCases_2024+orderedGallons_2023+orderedGallons_2024) %>% 
+  mutate(
+    twoYearThresholdMet = case_when(orderedGallons_2023>= 400 ~ 1, orderedGallons_2024>=400 ~ 1,orderedCases_2023>=400 ~ 1, orderedCases_2024>=400 ~1, TRUE ~ 0), 
+  percentChangeYOY = ((orderedGallons_2024+orderedCases_2024) - (orderedGallons_2023+orderedCases_2023))/(orderedGallons_2023+orderedCases_2023))
+  
+```
+
+
+```{r Data Joining 6}
+
+Main_Customer_Data <- Main_Customer_Data |>
+  mutate(
+    # Total ordered cases + gallons per year
+    total_ordered_2023 = orderedCases_2023 + orderedGallons_2023,
+    total_ordered_2024 = orderedCases_2024 + orderedGallons_2024,
+    
+    # Dummy indicators: whether cases, gallons, or both were ordered
+    orderedGallons_2023_TF = case_when(orderedGallons_2023 > 0 ~ 1, TRUE ~ 0),
+    orderedGallons_2024_TF = case_when(orderedGallons_2024 > 0 ~ 1, TRUE ~ 0),
+    orderedCases_2023_TF = case_when(orderedCases_2023 > 0 ~ 1, TRUE ~ 0),
+    orderedCases_2024_TF = case_when(orderedCases_2024 > 0 ~ 1, TRUE ~ 0),
+    
+    # Indicator if both cases and gallons were ordered in each year
+    bothOrdered_2023 = case_when(orderedCases_2023 > 0 & orderedGallons_2023 > 0 ~ 1, TRUE ~ 0),
+    bothOrdered_2024 = case_when(orderedCases_2024 > 0 & orderedGallons_2024 > 0 ~ 1, TRUE ~ 0)
+  )
+
+```
+
+
+
+```{r Data Joining 7}
+# clean the rest of the NA with 0's
+Main_Customer_Data <- Main_Customer_Data |>
+  mutate(across(c(loadedCases_2023, loadedCases_2024, loadedGallons_2023, loadedGallons_2024), ~ replace_na(.x, 0)))
+
+Main_Customer_Data <- Main_Customer_Data |>
+  mutate(across(c(deliveredCases_2023,deliveredCases_2024, deliveredGallons_2023, deliveredGallons_2024), ~ replace_na(.x, 0)))  
+
+```
+
+
+```{r Data Joining 8}
+
+# first delivery year column 
+Main_Customer_Data <- Main_Customer_Data |>
+  mutate(
+    FIRST_DELIVERY_DATE = mdy(FIRST_DELIVERY_DATE),  # Convert to Date
+    first_delivery_year = year(FIRST_DELIVERY_DATE)  # Extract Year
+  )
+```
+
+
+#Train and Test
+
+```{r}
+set.seed(100) #random number generator
+
+# you enter the proportion for the split here. I'd suggest .8
+inTrain <- createDataPartition(Main_Customer_Data$TwoYearTotal, p=.7, list=FALSE)
+
+# use the row indexes from line 87 to create the 2 sets.
+# train includes the index, test excludes the index.
+
+train_set <- Main_Customer_Data[inTrain,]
+test_set <- Main_Customer_Data[-inTrain,]
+```
+
+
+# Modeling
+
+## Regression
+
+**I want to try first predicting how many gallons the customer orders**
+
+```{r}
+
+
+lm_model <- lm(TwoYearTotal ~ ON_BOARDING_DATE + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + numberOfOutlets + orderedGallons_2023_TF + orderedGallons_2024_TF + orderedGallons_2023_TF + orderedGallons_2024_TF + bothOrdered_2023 + bothOrdered_2024, data = train_set)
+
+summary(lm_model)
+
+```
+
+R2 is very low at 0.15. The intercept seems a bit unrealistic with the number of orders being 8528 without any other predictiors bringing that number higher or lower. I wonder if we need to handle this by removing high order customers.
+
+I am seeing significance in columns:
+- Local Market Partner
+- CO2 Customer
+- number of Outlets
