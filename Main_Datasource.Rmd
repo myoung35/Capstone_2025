@@ -501,6 +501,5 @@ C50Model_NoOutlet <- C5.0(as.factor(ThreshBins)~ FREQUENT_ORDER_TYPE + COLD_DRIN
 ```{r}
 plot(C50Model_NoOutlet)
 
-C50Model_NoOutlet$size
 ```
 
