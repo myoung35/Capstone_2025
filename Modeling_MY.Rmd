@@ -13,7 +13,7 @@ editor_options:
 ---
 
 ```{r}
-pacman::p_load(tidyverse, scales, dplyr, corrr, janitor, tidyr, psych, readr, lubridate, rpart)
+pacman::p_load(tidyverse, scales, dplyr, corrr, janitor, tidyr, psych, readr, lubridate, rpart, rpart.plot, caret, C50, RWeka, iris)
 ```
 
 # Load Data
@@ -42,6 +42,10 @@ AddressZipData <- AddressZipData |>
 AddressZipData[rowSums(is.na(AddressZipData)) > 0, ]
 
 ```
+
+
+
+
 
 ```{r Data Joining 1}
 CustomerProfileData <- CustomerProfileData |>
@@ -87,6 +91,8 @@ aggregated_cost <- TransactionalData |>
             loadedGallons = sum(LOADED_GALLONS),
             deliveredGallons = sum(DELIVERED_GALLONS))
 
+
+
 #The code pivots the database above to have one row per customer and a column for each cases/gallons ordered for each year
 aggregated_cost_wide <- aggregated_cost |>
   pivot_wider(
@@ -118,6 +124,11 @@ Main_Customer_Data <- CustomerProfileData |>
             numberOfOutlets = sum(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 0,TRUE ~1)),
             wellPerformingOutlet = sum(case_when((orderedGallons_2023 + orderedCases_2023) >= 400 ~ 1, (orderedGallons_2024 + orderedCases_2024) >=400 ~ 1, TRUE ~ 0)),
             wellPerformingOutlet2YR = sum(case_when((orderedGallons_2023 +orderedGallons_2024 + orderedCases_2023 + orderedCases_2024) >=800~ 1, TRUE ~ 0)),
+            GeoSpread = n_distinct(ZIP_CODE),
+            most_common_zip = if_else(
+              numberOfOutlets == 1,  # If only one location, take that ZIP
+              first(ZIP_CODE),
+              ZIP_CODE[which.max(tabulate(match(ZIP_CODE, unique(ZIP_CODE))))]), 
             orderedCases_2023 = sum(orderedCases_2023),
             orderedCases_2024 = sum(orderedCases_2024),
             loadedCases_2023 = sum(loadedCases_2023),
@@ -178,7 +189,9 @@ Main_Customer_Data <- Main_Customer_Data |>
 Main_Customer_Data <- Main_Customer_Data |>
   mutate(
     FIRST_DELIVERY_DATE = mdy(FIRST_DELIVERY_DATE),  # Convert to Date
-    first_delivery_year = year(FIRST_DELIVERY_DATE)  # Extract Year
+    first_delivery_year = year(FIRST_DELIVERY_DATE),  # Extract Year
+    ON_BOARDING_DATE = mdy(ON_BOARDING_DATE),
+    ON_BOARDING_year = year(ON_BOARDING_DATE)
   )
 ```
 
@@ -220,3 +233,197 @@ I am seeing significance in columns:
 - Local Market Partner
 - CO2 Customer
 - number of Outlets
+
+```{r}
+lm_model_all <- lm(TwoYearTotal ~ FREQUENT_ORDER_TYPE + numberOfOutlets, data = train_set)
+
+summary(lm_model_all)
+```
+I wonder if we create an indicator to say if the customer has x% growth and their two year thresh is at x, and their 2024 orders are not 0, then they are a customer we anticipate to grow and that be our predictor?
+it would be 0/1 and outlets, CO2 Customer, cases vs gallons can all still be predictors of if they will be in that 1/0 indicator
+
+
+```{r}
+#this model only 
+rpart_model <- rpart(TwoYearTotal ~ ., data = train_set, method = "anova")
+
+rpart.plot(rpart_model, type = 2, extra = 101, fallen.leaves = TRUE)
+```
+
+
+```{r}
+write.csv(Main_Customer_Data, "my_dataV2.csv", row.names = FALSE)
+```
+
+- segmentation for top customers 
+- look at how to weight/logging large customers
+
+
+
+Remove 137 customers that have no orders in 2023 or 2024?
+
+73 customers with a Z score greater than 3
+
+3992 customers above threshold -> 26% of the data
+It looks like the "Outliers" (besides anyone orderingover 800 gallons) are customers ordering over 400K gallons. I made a few scatter plots and those are the points that stood out as being seperate. Can potentially make a case for the between 200K and 400K customers
+
+Do we want to try looking at a Logarithmic Growth Rate
+Formula: (ln(Ending Value) - ln(Beginning Value)) / Time Period
+
+115 of these high volumne customers customers have 0 well performing outlets using the two year threshold. So many have such a small amount of well performing outlets
+Average proprtion of well performing outlets is 91% among high performing customers
+Weighted profitability shows on average customers have 1.28% well performing outlets
+
+Talk to Jeff about
+
+The biggest thing I think we need to address in 10 minutes is our understanding of the BP and the target variable. My understanding of the BP is that SWIRE wants to understand which of their customers they should keep servicing internally (on red truck) whether they are below the thresh or not, because we anticipate these customers to be profitable or worth SWIRE's time in the long run. In order to do that, my thought is to make a target variable that says which customers should be serviced on red truck and which should not be, but in order to do that we almost need to make the target variable ourselves with a model. circular reference
+- target variable
+- Outlier handling
+- is using 800 gallons for 2 years a bad way to look at the data?
+- business problem statement 
+- more customer segmentation to identify the customers I would keep on red truck.
+
+
+
+Volume-based value: Customers with many well-performing outlets (like your 600-outlet customer with 96% well-performing)
+
+These are valuable due to sheer volume (576 well-performing outlets)
+
+
+Efficiency-based value: Customers with high proportion of well-performing outlets (like your 7-outlet customer with 100% well-performing)
+
+These are valuable due to efficiency and potential for growth
+
+**DATA REMOVAL**
+- Remove customers that have 0 orders in 2023 and 2024 but have a first deliver date in 2023 or 2024 -> this is 34 customers  
+-There is one customer that has first delivery date before the on boarding date. The on boarding date is actually in 2024, 0 orders in 2023. first delivery date in 2020
+- I did not see any other errors
+
+I think we need to create the model based on 400 gallons a year, so that they can use it with data over two years 
+```{r}
+Main_Customer_Data2 <- 
+  Main_Customer_Data %>% 
+  mutate(excludeinclude = case_when(
+    year(FIRST_DELIVERY_DATE) == 2023 & (orderedCases_2023 == 0 & orderedGallons_2023 == 0 )~"exclude",
+    year(FIRST_DELIVERY_DATE) == 2024 & (orderedCases_2024 == 0 & orderedGallons_2024 == 0 )~"exclude",
+    TRUE ~"include")) %>% 
+  filter(excludeinclude == 'include')
+```
+
+```{r}
+Main_Customer_Data2 <- Main_Customer_Data2 %>% 
+   mutate(ThreshBins = case_when(
+    total_ordered_2023 < 1000 | total_ordered_2024 <  1000 ~ "<1K",
+    (total_ordered_2023 >= 1000 & total_ordered_2023 < 10000) | (total_ordered_2024 >= 1000 & total_ordered_2024 < 10000) ~ "1K-10K",
+     (total_ordered_2023 >= 10000 & total_ordered_2023 < 100000) | (total_ordered_2024 >= 10000 & total_ordered_2024 < 100000) ~ "10K-100K",
+
+    total_ordered_2023 > 100000  | total_ordered_2024 > 100000 ~ ">100K") )
+```
+
+
+
+```{r}
+set.seed(100) #random number generator
+
+# you enter the proportion for the split here. I'd suggest .8
+inTrainAboveThresh <- Main_Customer_Data2 %>% filter((total_ordered_2023>=400 | total_ordered_2024>=400))
+
+char_col <- sapply(inTrainAboveThresh, is.character)
+inTrainAboveThresh[char_col] <- lapply(inTrainAboveThresh[char_col], as.factor)
+
+logical_cols <- sapply(inTrainAboveThresh, is.logical)
+inTrainAboveThresh[logical_cols] <- lapply(inTrainAboveThresh[logical_cols], as.numeric)
+```
+
+```{r}
+write.csv(inTrainAboveThresh, "my_dataV3.csv", row.names = FALSE)
+```
+
+```{r}
+C50Model <- C5.0(ThreshBins~ COLD_DRINK_CHANNEL + SUB_TRADE_CHANNEL + LOCAL_MARKET_PARTNER + most_common_zip + CO2_CUSTOMER + year(ON_BOARDING_DATE)  ,inTrainAboveThresh, CF = .97, earylStopping = FALSE, noGlobalPruning = FALSE)
+#orignally included wellperformingoutlet, but I will be using this to predict customers that do not have any well performing outlets including themselves, so I do not htink it would be helpful to use this as a predictor
+```
+
+```{r}
+
+plot(C50Model)
+```
+
+```{r}
+C50Model$size
+```
+
+This tree model can help you predict which sales volume bucket your customers might fall into in the future based on their characteristics.
+If you have customers or outlets that are currently under your threshold but show potential for growth, you can use this model to predict their future performance
+
+complex tree - 49 nodes. geo spread is first decision variable. before adding that I had number of outlets at the top. 
+
+This model I am purposfully making less complex:
+```{r}
+C50Model2 <- C5.0(ThreshBins~ COLD_DRINK_CHANNEL + SUB_TRADE_CHANNEL + numberOfOutlets + LOCAL_MARKET_PARTNER + as.factor(most_common_zip) + CO2_CUSTOMER  + as.factor(first_delivery_year)  ,inTrainAboveThresh, CF = .97, earylStopping = FALSE, noGlobalPruning = FALSE)
+#orignally included wellperformingoutlet, but I will be using this to predict customers that do not have any well performing outlets including themselves, so I do not htink it would be helpful to use this as a predictor
+```
+
+```{r}
+
+plot(C50Model2)
+```
+
+How can we apply this and test this in our test set if no customers order over 400 a year and we want to determine if they will in the future? Do we need to build a tree with a different model? like worthwhile customer? (running into same issue with needing to determine that ourselves)
+
+If I were to determine a worthwhile customers I would say
+1) if the customer has no outlets and orders over 400 G a year, they are good
+2) if the customer has outlets, then the outlets proximity to each other needs to be relatively close together and [50%] are well performing, 
+3) If the customer has outlets that are more spaced out, they may still be a worthwhile customer but the prothe threshold for proportion of well performing outlets would need to be higher. 
+3) if they order Co2 they are a worthwhile customer [?]
+4) if they are a local market partner they are a worthwhile customer
+
+
+
+**Lets try Clustering**
+```{r}
+ 
+
+df_1<- inTrainAboveThresh %>% select( numberOfOutlets, LOCAL_MARKET_PARTNER, GeoSpread, most_common_zip, CO2_CUSTOMER, hasOutlet, first_delivery_year)
+
+KCluster1 <-kmeans(df_1, centers = 5, nstart = 25)
+
+KCluster1$cluster
+
+KCluster1
+```
+
+```{r}
+ggplot(inTrainAboveThresh, aes(x = TwoYearTotal, y = numberOfOutlets, color = as.factor(KCluster1$cluster)) )+
+  geom_point()
+  
+```
+**Regression  with decision tree guiding 
+ 
+ 
+ 
+ Change Main Datasoure
+ - remove 50 customers with onborading date and no orders in 2023 and 2024
+ - exclude customer with onboarding date after first delivery date
+ - add a column on boarding year year
+ - bring in case indicator
+   - has case
+   - proportion of cases to total orders
+   - remove the TF and both ordered columns 
+- remove delivery loaded columns
+- remove well performing outlet (keep the 2 year one -> the one that says 400 gallons in 2023 OR 2024)
+- remove two year threshmet
+- zip code
+   - log and lat column
+   - geospread
+   - most_common_Zip 
+   - calcuate the difference between the density area and long lat of the customer (need to EDA to find the density area )
+   
+   If I can clean up the amount of code chunks 
+
+
+modeling to do:
+- segment outlet versus non outlet customers 
+- build regression/ time series models for each (create two seperate model)
+- create some map density plots to understand customer location
+- 

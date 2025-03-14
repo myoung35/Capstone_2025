@@ -253,7 +253,8 @@ Main_Customer_Data2 <- Main_Customer_Data1 %>%
     (total_ordered_2023 >= 1000 & total_ordered_2023 < 10000) | (total_ordered_2024 >= 1000 & total_ordered_2024 < 10000) ~ "1K-10K",
      (total_ordered_2023 >= 10000 & total_ordered_2023 < 100000) | (total_ordered_2024 >= 10000 & total_ordered_2024 < 100000) ~ "10K-100K",
 
-    total_ordered_2023 > 100000  | total_ordered_2024 > 100000 ~ ">100K") ) %>% 
+    total_ordered_2023 > 100000  | total_ordered_2024 > 100000 ~ ">100K"),
+    percentChangeYOY = ((total_ordered_2024) - (total_ordered_2023))/(total_ordered_2023)) %>% 
     mutate(excludeinclude = case_when(
     FIRST_DELIVERY_YEAR == 2023 & (total_ordered_2023 == 0 )~"exclude",
     FIRST_DELIVERY_YEAR == 2024 & (total_ordered_2024 == 0 )~"exclude",
@@ -369,7 +370,8 @@ Main_Customer_Data_HAS_OUTLET <- Main_Customer_Data1 %>%
     (total_ordered_2023 >= 1000 & total_ordered_2023 < 10000) | (total_ordered_2024 >= 1000 & total_ordered_2024 < 10000) ~ "1K-10K",
      (total_ordered_2023 >= 10000 & total_ordered_2023 < 100000) | (total_ordered_2024 >= 10000 & total_ordered_2024 < 100000) ~ "10K-100K",
 
-    total_ordered_2023 > 100000  | total_ordered_2024 > 100000 ~ ">100K") ) %>% 
+    total_ordered_2023 > 100000  | total_ordered_2024 > 100000 ~ ">100K"),
+     percentChangeYOY = ((total_ordered_2024) - (total_ordered_2023))/(total_ordered_2023)) %>% 
     mutate(excludeinclude = case_when(
     FIRST_DELIVERY_YEAR == 2023 & (total_ordered_2023 == 0 )~"exclude",
     FIRST_DELIVERY_YEAR == 2024 & (total_ordered_2024 == 0 )~"exclude",
@@ -479,7 +481,8 @@ Main_Customer_Data_NO_OUTLET <-  Main_Customer_Data1 %>%
     (total_ordered_2023 >= 501 & total_ordered_2023 < 1001) | (total_ordered_2024 >= 501 & total_ordered_2024 < 1001) ~ "500-1K",
      (total_ordered_2023 >= 1001 & total_ordered_2023 < 2001) | (total_ordered_2024 >= 1001 & total_ordered_2024 < 2001) ~ "1K-2K",
 
-    total_ordered_2023 >= 2001  | total_ordered_2024 > 2001 ~ ">2K") ) %>% 
+    total_ordered_2023 >= 2001  | total_ordered_2024 > 2001 ~ ">2K"),
+    percentChangeYOY = ((total_ordered_2024) - (total_ordered_2023))/(total_ordered_2023)) %>% 
     mutate(excludeinclude = case_when(
     FIRST_DELIVERY_YEAR == 2023 & (total_ordered_2023 == 0 )~"exclude",
     FIRST_DELIVERY_YEAR == 2024 & (total_ordered_2024 == 0 )~"exclude",
