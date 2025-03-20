@@ -1,0 +1,486 @@
+---
+title: "Data Source"
+author: "Madalyn Young & Imogen Holdsworth"
+date: "2025-03-16"
+output: 
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_float: yes # makes the toc move along
+    code_folding: "show"  # Use "hide" to collapse code by default
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r}
+pacman::p_load(tidyverse, scales, dplyr, corrr, janitor, tidyr, psych, readr, lubridate, rpart, rpart.plot, caret, C50, sf, maps, dbscan, geosphere, nnet, randomForest,readxl)
+```
+
+# Load Orignal Data
+```{r}
+CustomerProfileData <- read.csv("Data/customer_profile.csv")  
+TransactionalData <- read.csv("Data/transactional_data.csv")
+AddressZipData <- read.csv("Data/customer_address_and_zip_mapping.csv")
+DeliveryCostData <- read.csv("Data/delivery_cost_data.csv")
+```
+
+# First Round Cleaning
+
+## Clean Address Data
+
+## Address Data Cleaning
+* break address data into seperate columns
+* change lat and long to numeric
+```{r}
+#clean the address data
+# Split the column
+AddressZipData <- AddressZipData |>
+  separate(full.address, into = c("ZIP", "City", "State Name", "State Short", 
+                                  "County","Code", "Latitude", "Longitude"), sep = ",")
+
+AddressZipData$Latitude <- as.numeric(AddressZipData$Latitude)
+
+AddressZipData$Longitude <- as.numeric(AddressZipData$Longitude)
+```
+
+## Transactional Data Cleaning
+
+```{r}
+TransactionalData$TRANSACTION_DATE <- mdy(TransactionalData$TRANSACTION_DATE)
+  
+TransactionalData <- TransactionalData %>% 
+  mutate(Quarter_column = quarter(TRANSACTION_DATE), 
+         Quarter_year = paste(Quarter_column, YEAR, sep = " "),
+         MONTH = month(TRANSACTION_DATE)) %>% 
+  select(-c(LOADED_CASES, DELIVERED_CASES, LOADED_GALLONS, DELIVERED_GALLONS))
+```
+
+## Customer Profile Data Cleaning
+
+* Added Entity ID to look at customers with outlet all together
+* clean date format
+* convert character columns to factors
+* convert logical columns to 0/1 - for easier modeling later
+* filter out the one customer that has a first delivery date before they were on boarded
+```{r}
+#clean Customer Profile Data
+  CustomerProfileData <-  CustomerProfileData %>% 
+  mutate(
+    Entity_ID = case_when(
+      is.na(PRIMARY_GROUP_NUMBER) ~ CUSTOMER_NUMBER,  # If PRIMARY_GROUP_NUMBER is NA, use CUSTOMER_NUMBER
+      TRUE ~ PRIMARY_GROUP_NUMBER),
+    ON_BOARDING_DATE = mdy(ON_BOARDING_DATE),
+    FIRST_DELIVERY_DATE = mdy(FIRST_DELIVERY_DATE),
+    ON_BOARDING_YEAR = year(ON_BOARDING_DATE),
+    FIRST_DELIVERY_YEAR = year(FIRST_DELIVERY_DATE))
+
+char_col <- sapply(CustomerProfileData, is.character)
+CustomerProfileData[char_col] <- lapply(CustomerProfileData[char_col], as.factor)
+
+logical_cols <- sapply(CustomerProfileData, is.logical)
+CustomerProfileData[logical_cols] <- lapply(CustomerProfileData[logical_cols], as.numeric)
+
+#remove the customer where their on_boarding date was first delivery date was before the onboarding date (1 customer)
+CustomerProfileData <- CustomerProfileData %>% 
+  filter(FIRST_DELIVERY_DATE>=ON_BOARDING_DATE)
+```
+
+
+## Annual Aggregated Transactionl Data
+
+```{r}
+#Pivot wide the cost data
+#aggregated  transaction data to join to customer table
+
+# aggregate transaction data by customer_number and year
+#sum the ordered cases and gallons by customer number and year
+#this table is set up so each customer number has  two rows, one for 2023, one for 2024. Each column is sum of ordered cases/loaded cases. delivered cases in that year 
+aggregated_cost <- TransactionalData |>
+  group_by(CUSTOMER_NUMBER, YEAR) |>
+  summarize(orderedCases = sum(ORDERED_CASES),
+            orderedGallons = sum(ORDERED_GALLONS))
+
+
+
+#The code pivots the database above to have one row per customer and a column for each cases/gallons ordered for each year
+aggregated_cost_wide <- aggregated_cost |>
+  pivot_wider(
+    names_from = YEAR, 
+    values_from = c(orderedCases, 
+                    orderedGallons),
+    names_sep = "_"
+  )
+```
+
+
+## Location Clustering
+
+```{r}
+CustomerProfile_Location <- CustomerProfileData %>% 
+  left_join(AddressZipData, by = c("ZIP_CODE"="zip")) 
+```
+
+* do KMeans clustering to identify the four main location clusters
+* identify the center (Centroid) of each of the four main clusters
+```{r}
+#cluster the addresses and calculate the centroid for each cluster
+##Multiple centroids
+set.seed(123)
+
+kmeans_result <- kmeans(CustomerProfile_Location[,c("Longitude", "Latitude")], centers = 4)
+
+CustomerProfile_Location$cluster <- as.factor(kmeans_result$cluster)
+
+
+centroids <- CustomerProfile_Location %>% 
+  group_by(cluster) %>% 
+  summarize(centroid_lon = mean(Longitude), centroid_lat = mean(Latitude))
+
+```
+
+
+* Calculate the miles distance of each customers location to the centroid
+```{r}
+
+haversine_distance <- function(lon1, lat1, lon2, lat2) {
+  distHaversine(c(lon1, lat1), c(lon2,lat2))/1609.34 
+}# converts meters to miles
+
+#Join main customer data to the clusters created above
+CustomerProfile_Location <- CustomerProfile_Location %>% 
+  left_join(centroids, by = "cluster")
+
+
+CustomerProfile_Location <- CustomerProfile_Location %>% 
+  mutate(
+    distance_to_centroid = mapply(haversine_distance, CustomerProfile_Location$Longitude, CustomerProfile_Location$Latitude, CustomerProfile_Location$centroid_lon, CustomerProfile_Location$centroid_lat)
+  )
+
+```
+
+
+# Annual Customer No Retailer
+```{r}
+Annual_Customer_No_Retailer <- CustomerProfile_Location %>% 
+  left_join(aggregated_cost_wide, by = "CUSTOMER_NUMBER") %>% 
+  mutate(across(c(orderedCases_2023, orderedCases_2024, orderedGallons_2023, orderedGallons_2024), ~ replace_na(.x, 0)),
+         total_ordered = (orderedCases_2024 + orderedGallons_2024 +orderedCases_2023 + orderedGallons_2023),
+         total_ordered_2023 = (orderedCases_2023 + orderedGallons_2023),
+         total_ordered_2024 = (orderedCases_2024 + orderedGallons_2024)) %>% 
+  filter(!(year(FIRST_DELIVERY_DATE) == 2023 & orderedCases_2023 == 0 & orderedGallons_2023 == 0) &
+    !(year(FIRST_DELIVERY_DATE) == 2024 & orderedCases_2024 == 0 & orderedGallons_2024 == 0)) %>% 
+  filter(!(total_ordered_2023 ==0 & total_ordered_2024 == 0))
+
+```
+
+
+```{r}
+Annual_Customer_No_Retailer <- Annual_Customer_No_Retailer %>% 
+  group_by(Entity_ID) %>% 
+  summarize(FREQUENT_ORDER_TYPE = FREQUENT_ORDER_TYPE[which.max(tabulate(match(FREQUENT_ORDER_TYPE, unique(FREQUENT_ORDER_TYPE))))],
+            COLD_DRINK_CHANNEL = first(COLD_DRINK_CHANNEL),
+            TRADE_CHANNEL = first(TRADE_CHANNEL),
+            SUB_TRADE_CHANNEL = first(SUB_TRADE_CHANNEL),
+            FIRST_DELIVERY_DATE = min(FIRST_DELIVERY_DATE),
+            FIRST_DELIVERY_YEAR = min(FIRST_DELIVERY_YEAR),
+            ON_BOARDING_DATE = min(ON_BOARDING_DATE),
+            ON_BOARDING_YEAR = min(ON_BOARDING_YEAR),
+            customer_age = as.numeric(format(Sys.Date(), "%Y")) - ON_BOARDING_YEAR,
+            numberOfOutlets = sum(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 1,TRUE ~1)),
+            LOCAL_MARKET_PARTNER = LOCAL_MARKET_PARTNER[which.max(tabulate(match(LOCAL_MARKET_PARTNER,unique(LOCAL_MARKET_PARTNER))))],
+            CO2_CUSTOMER =  CO2_CUSTOMER[which.max(tabulate(match(CO2_CUSTOMER, unique(CO2_CUSTOMER))))],
+            
+            hasOrderedCases = as.integer(mean(case_when((orderedCases_2023 + orderedCases_2024)>0 ~1, TRUE ~ 0))>0,1,TRUE~0),
+            
+            propCases = sum(orderedCases_2023, orderedCases_2024)/ sum(total_ordered),
+ 
+            zip_code =  first(ZIP), 
+            
+            city =  first(City),
+
+            state =   
+              first(`State Name`), 
+
+            region = first(cluster),
+             
+            distance_from_centroid = first(distance_to_centroid),
+
+            total_ordered_2023 = sum(total_ordered_2023),
+            total_ordered_2024 = sum(total_ordered_2024),
+            percentChangeYOY = ((total_ordered_2024) - (total_ordered_2023))/(total_ordered_2023)) %>% 
+  mutate(Binning_column = case_when(
+    (total_ordered_2023 < 400 & total_ordered_2024 < 400) & percentChangeYOY < 0.10 ~ "low volume low growth",
+         (total_ordered_2023 < 400 & total_ordered_2024 < 400) & percentChangeYOY > 0.10 ~ "low volume high growth",
+         (total_ordered_2023 > 400 & total_ordered_2024 > 400) & percentChangeYOY < 0.05 ~ "high volume low growth",
+         (total_ordered_2023 > 400 & total_ordered_2024 > 400) & percentChangeYOY > 0.05 ~ "high volume high growth",
+         (total_ordered_2023 > 400 | total_ordered_2024 > 400) & percentChangeYOY > 0 ~ "transtionary growing ",
+         (total_ordered_2023 > 400 | total_ordered_2024 > 400) & percentChangeYOY < 0 ~ "transitionary declining" )) %>% 
+  filter(numberOfOutlets == 1)
+
+```
+
+
+# Annual Customer Data Retailer
+```{r}
+Annual_Customer_Retailer <- CustomerProfile_Location %>% 
+  left_join(aggregated_cost_wide, by = "CUSTOMER_NUMBER") %>% 
+  mutate(across(c(orderedCases_2023, orderedCases_2024, orderedGallons_2023, orderedGallons_2024), ~ replace_na(.x, 0)),
+         total_ordered = (orderedCases_2024 + orderedGallons_2024 +orderedCases_2023 + orderedGallons_2023),
+         total_ordered_2023 = (orderedCases_2023 + orderedGallons_2023),
+         total_ordered_2024 = (orderedCases_2024 + orderedGallons_2024)) %>% 
+  filter(!(year(FIRST_DELIVERY_DATE) == 2023 & orderedCases_2023 == 0 & orderedGallons_2023 == 0) &
+    !(year(FIRST_DELIVERY_DATE) == 2024 & orderedCases_2024 == 0 & orderedGallons_2024 == 0))
+```
+
+```{r}
+Annual_Customer_Retailer <- Annual_Customer_Retailer %>% 
+  group_by(Entity_ID) %>% 
+    mutate(across(c(orderedCases_2023, orderedCases_2024, orderedGallons_2023, orderedGallons_2024), ~ replace_na(.x, 0)),
+         total_ordered = (orderedCases_2024 + orderedGallons_2024 +orderedCases_2023 + orderedGallons_2023),
+         total_ordered_2023 = (orderedCases_2023 + orderedGallons_2023),
+         total_ordered_2024 = (orderedCases_2024 + orderedGallons_2024)) %>% 
+  group_by(Entity_ID) %>% 
+  summarize(FREQUENT_ORDER_TYPE = FREQUENT_ORDER_TYPE[which.max(tabulate(match(FREQUENT_ORDER_TYPE, unique(FREQUENT_ORDER_TYPE))))],
+            COLD_DRINK_CHANNEL = first(COLD_DRINK_CHANNEL),
+            TRADE_CHANNEL = first(TRADE_CHANNEL),
+            SUB_TRADE_CHANNEL = first(SUB_TRADE_CHANNEL),
+            FIRST_DELIVERY_DATE = min(FIRST_DELIVERY_DATE),
+            FIRST_DELIVERY_YEAR = min(FIRST_DELIVERY_YEAR),
+            ON_BOARDING_DATE = min(ON_BOARDING_DATE),
+            ON_BOARDING_YEAR = min(ON_BOARDING_YEAR),
+            customer_age = as.numeric(format(Sys.Date(), "%Y")) - ON_BOARDING_YEAR,
+            
+            LOCAL_MARKET_PARTNER = LOCAL_MARKET_PARTNER[which.max(tabulate(match(LOCAL_MARKET_PARTNER,unique(LOCAL_MARKET_PARTNER))))],
+            CO2_CUSTOMER =  CO2_CUSTOMER[which.max(tabulate(match(CO2_CUSTOMER, unique(CO2_CUSTOMER))))],
+            hasOutlet = first(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 0,TRUE ~1)),
+            numberOfOutlets = sum(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 1,TRUE ~1)),
+            wellPerformingOutlet = sum(case_when((orderedGallons_2023 + orderedCases_2023) >= 400 ~ 1, (orderedGallons_2024 + orderedCases_2024) >=400 ~ 1, TRUE ~ 0)),
+            
+            hasOrderedCases = as.integer(mean(case_when((orderedCases_2023 + orderedCases_2024)>0 ~1, TRUE ~ 0))>0,1,TRUE~0),
+            
+            propCases = sum(orderedCases_2023, orderedCases_2024)/ sum(total_ordered),
+            
+            GeoSpread = n_distinct(ZIP),
+            most_common_zip = if_else(
+              numberOfOutlets == 1,  # If only one location, take that ZIP
+              first(ZIP),
+              ZIP[which.max(tabulate(match(ZIP, unique(ZIP))))]), 
+            largest_zip = if_else(
+              numberOfOutlets == 1,
+              first(ZIP),
+              ZIP[which.max(total_ordered)]
+            ),
+            
+            most_common_city = if_else(
+              numberOfOutlets == 1,  # If only one location, take that ZIP
+              first(City),
+              City[which.max(tabulate(match(City, unique(City))))]), 
+            largest_city = if_else(
+              numberOfOutlets == 1,
+              first(City),
+              City[which.max(total_ordered)]
+            ),
+            
+            most_common_state = if_else(
+              numberOfOutlets == 1,  # If only one location, take that ZIP
+              first(`State Name`),
+              `State Name`[which.max(tabulate(match(`State Name`, unique(`State Name`))))]), 
+            largest_state = if_else(
+              numberOfOutlets == 1,
+              first(`State Name`),
+              `State Name`[which.max(total_ordered)]
+            ),
+            
+            most_common_region = if_else(
+              numberOfOutlets == 1,  # If only one location, take that ZIP
+              first(cluster),
+              cluster[which.max(tabulate(match(cluster, unique(cluster))))]), 
+            largest_region = if_else(
+              numberOfOutlets == 1,
+              first(cluster),
+              cluster[which.max(total_ordered)]
+            ),
+            
+            most_common_distance = if_else(
+              numberOfOutlets == 1,  # If only one location, take that ZIP
+              first(distance_to_centroid),
+              distance_to_centroid[which.max(tabulate(match(distance_to_centroid, unique(distance_to_centroid))))]), 
+            
+            largest_distance = if_else(
+              numberOfOutlets == 1,
+              first(distance_to_centroid),
+              distance_to_centroid[which.max(total_ordered)]
+            ),
+            
+                        
+            avg_distance = if_else(
+              numberOfOutlets == 1,
+              first(distance_to_centroid),
+              mean(distance_to_centroid)
+            ),
+            
+
+            total_ordered_2023 = sum(total_ordered_2023),
+            total_ordered_2024 = sum(total_ordered_2024),
+            percentChangeYOY = ((total_ordered_2024) - (total_ordered_2023))/(total_ordered_2023))%>% 
+  mutate(Binning_column = case_when(
+    (total_ordered_2023 < 400 & total_ordered_2024 < 400) & percentChangeYOY < 0.10 ~ "low volume low growth",
+         (total_ordered_2023 < 400 & total_ordered_2024 < 400) & percentChangeYOY > 0.10 ~ "low volume high growth",
+         (total_ordered_2023 > 400 & total_ordered_2024 > 400) & percentChangeYOY < 0.05 ~ "high volume low growth",
+         (total_ordered_2023 > 400 & total_ordered_2024 > 400) & percentChangeYOY > 0.05 ~ "high volume high growth",
+         (total_ordered_2023 > 400 | total_ordered_2024 > 400) & percentChangeYOY > 0 ~ "transtionary growing ",
+         (total_ordered_2023 > 400 | total_ordered_2024 > 400) & percentChangeYOY < 0 ~ "transitionary declining" )) %>% 
+  filter(numberOfOutlets > 1)
+```
+
+
+#  Unaggregated Dates Customer Data No Retailer
+
+```{r}
+aggregated_cost_by_month <- TransactionalData |>
+  group_by(CUSTOMER_NUMBER, YEAR, Quarter_column, Quarter_year,MONTH) |>
+  summarize(orderedCases = sum(ORDERED_CASES),
+            orderedGallons = sum(ORDERED_GALLONS),
+            totalOrdered = sum(ORDERED_CASES, ORDERED_GALLONS))
+```
+
+
+```{r}
+UnaggregatedDates_Customer_No_Retailer <- CustomerProfile_Location %>% 
+  left_join(aggregated_cost_by_month, by = "CUSTOMER_NUMBER") %>% 
+   mutate(across(c(orderedCases, orderedGallons, totalOrdered), ~ replace_na(.x, 0))) 
+  
+```
+
+*create rows for each month
+```{r}
+all_months <- crossing(
+  CUSTOMER_NUMBER = unique(UnaggregatedDates_Customer_No_Retailer$CUSTOMER_NUMBER),
+  YEAR = unique(UnaggregatedDates_Customer_No_Retailer$YEAR, na.rm = TRUE),
+  MONTH = 1:12
+) %>%
+  mutate(
+    Quarter_column = case_when(
+      MONTH >= 1 & MONTH <= 3 ~ 1,
+      MONTH >= 4 & MONTH <= 6 ~ 2,
+      MONTH >= 7 & MONTH <= 9 ~ 3,
+      TRUE ~ 4
+    ),
+    Quarter_year = paste(Quarter_column, YEAR, sep = " ")
+  ) %>% filter(!is.na(YEAR) )
+
+# First, create a customer reference dataset with one row per customer
+customer_reference <- UnaggregatedDates_Customer_No_Retailer %>%
+  group_by(CUSTOMER_NUMBER) %>%
+  summarize(
+    PRIMARY_GROUP_NUMBER = first(PRIMARY_GROUP_NUMBER),
+    FREQUENT_ORDER_TYPE = first(FREQUENT_ORDER_TYPE),
+    FIRST_DELIVERY_DATE = first(FIRST_DELIVERY_DATE),
+    ON_BOARDING_DATE = first(ON_BOARDING_DATE),
+    COLD_DRINK_CHANNEL = first(COLD_DRINK_CHANNEL),
+    TRADE_CHANNEL = first(TRADE_CHANNEL),
+    SUB_TRADE_CHANNEL = first(SUB_TRADE_CHANNEL),
+    LOCAL_MARKET_PARTNER = first(LOCAL_MARKET_PARTNER),
+    CO2_CUSTOMER = first(CO2_CUSTOMER),
+    ZIP_CODE = first(ZIP_CODE),
+    Entity_ID = first(Entity_ID),
+    ON_BOARDING_YEAR = first(ON_BOARDING_YEAR),
+    FIRST_DELIVERY_YEAR = first(FIRST_DELIVERY_YEAR),
+    ZIP = first(ZIP),
+    City = first(City),
+    `State Name` = first(`State Name`),
+    Latitude = first(Latitude),
+    Longitude = first(Longitude),
+    cluster = first(cluster),
+    distance_to_centroid = first(distance_to_centroid)
+  )
+
+# Now join the transactions with all_months first, then join with customer reference
+UnaggregatedDates_Customer_No_Retailer <- all_months %>%
+  left_join(
+    UnaggregatedDates_Customer_No_Retailer %>% 
+      select(CUSTOMER_NUMBER, YEAR, MONTH, Quarter_column, Quarter_year, orderedCases, orderedGallons, totalOrdered),
+    by = c("CUSTOMER_NUMBER", "YEAR", "MONTH")
+  ) %>%
+  mutate(across(c(orderedCases, orderedGallons, totalOrdered), ~ replace_na(.x, 0))) %>%
+  # Join with the customer reference data
+  left_join(customer_reference, by = "CUSTOMER_NUMBER")
+```
+
+
+```{r}
+BYMONTH_Customer_No_Retailer <- UnaggregatedDates_Customer_No_Retailer %>% 
+  filter(is.na(PRIMARY_GROUP_NUMBER)) %>% 
+  group_by(Entity_ID, YEAR, MONTH) %>% 
+  summarize(
+    FREQUENT_ORDER_TYPE = FREQUENT_ORDER_TYPE[which.max(tabulate(match(FREQUENT_ORDER_TYPE, unique(FREQUENT_ORDER_TYPE))))],
+    COLD_DRINK_CHANNEL = first(COLD_DRINK_CHANNEL),
+    TRADE_CHANNEL = first(TRADE_CHANNEL),
+    SUB_TRADE_CHANNEL = first(SUB_TRADE_CHANNEL),
+    FIRST_DELIVERY_DATE = min(FIRST_DELIVERY_DATE),
+    FIRST_DELIVERY_YEAR = min(FIRST_DELIVERY_YEAR),
+    ON_BOARDING_DATE = min(ON_BOARDING_DATE),
+    ON_BOARDING_YEAR = min(ON_BOARDING_YEAR),
+    customer_age = as.numeric(format(Sys.Date(), "%Y")) - ON_BOARDING_YEAR,
+            
+    LOCAL_MARKET_PARTNER = LOCAL_MARKET_PARTNER[which.max(tabulate(match(LOCAL_MARKET_PARTNER,unique(LOCAL_MARKET_PARTNER))))],
+    CO2_CUSTOMER =  CO2_CUSTOMER[which.max(tabulate(match(CO2_CUSTOMER, unique(CO2_CUSTOMER))))],
+    
+    hasOrderedCases = as.integer(case_when((orderedCases)>0 ~1, TRUE ~ 0)),
+            
+    propCases = sum(orderedCases)/ sum(totalOrdered),
+    
+    zip_code =  first(ZIP), 
+            
+    city =  first(City),
+
+    state =  first(`State Name`), 
+
+    region = first(cluster),
+             
+    distance_from_centroid = first(distance_to_centroid),
+    orderedCases = sum(orderedCases),
+    orderedGallons = sum(orderedGallons),
+    totalOrdered = sum(totalOrdered)) 
+
+```
+
+Maybe the issue I am having is that the data is still in long mode, no column of orders y quarter. What would be better?
+
+```{r}
+BYQUARTER_Customer_No_Retailer <- UnaggregatedDates_Customer_No_Retailer %>% 
+  filter(is.na(PRIMARY_GROUP_NUMBER)) %>% 
+  group_by(Entity_ID, Quarter_year.x) %>% 
+  summarize(
+    FREQUENT_ORDER_TYPE = FREQUENT_ORDER_TYPE[which.max(tabulate(match(FREQUENT_ORDER_TYPE, unique(FREQUENT_ORDER_TYPE))))],
+    COLD_DRINK_CHANNEL = first(COLD_DRINK_CHANNEL),
+    TRADE_CHANNEL = first(TRADE_CHANNEL),
+    SUB_TRADE_CHANNEL = first(SUB_TRADE_CHANNEL),
+    FIRST_DELIVERY_DATE = min(FIRST_DELIVERY_DATE),
+    FIRST_DELIVERY_YEAR = min(FIRST_DELIVERY_YEAR),
+    ON_BOARDING_DATE = min(ON_BOARDING_DATE),
+    ON_BOARDING_YEAR = min(ON_BOARDING_YEAR),
+    customer_age = as.numeric(format(Sys.Date(), "%Y")) - ON_BOARDING_YEAR,
+            
+    LOCAL_MARKET_PARTNER = LOCAL_MARKET_PARTNER[which.max(tabulate(match(LOCAL_MARKET_PARTNER,unique(LOCAL_MARKET_PARTNER))))],
+    CO2_CUSTOMER =  CO2_CUSTOMER[which.max(tabulate(match(CO2_CUSTOMER, unique(CO2_CUSTOMER))))],
+    
+    hasOrderedCases = as.integer(case_when((orderedCases)>0 ~1, TRUE ~ 0)),
+            
+    propCases = sum(orderedCases)/ sum(totalOrdered),
+    
+    zip_code =  first(ZIP), 
+            
+    city =  first(City),
+
+    state =  first(`State Name`), 
+
+    region = first(cluster),
+             
+    distance_from_centroid = first(distance_to_centroid),
+    orderedCases = sum(orderedCases),
+    orderedGallons = sum(orderedGallons),
+    totalOrdered = sum(totalOrdered)) 
+
+```
