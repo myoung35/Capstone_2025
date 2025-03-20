@@ -414,7 +414,7 @@ BYMONTH_Customer_No_Retailer <- UnaggregatedDates_Customer_No_Retailer %>%
   filter(is.na(PRIMARY_GROUP_NUMBER)) %>% 
   group_by(Entity_ID, YEAR, MONTH) %>% 
   summarize(
-    FREQUENT_ORDER_TYPE = FREQUENT_ORDER_TYPE[which.max(tabulate(match(FREQUENT_ORDER_TYPE, unique(FREQUENT_ORDER_TYPE))))],
+    FREQUENT_ORDER_TYPE = first(FREQUENT_ORDER_TYPE),  # simplified
     COLD_DRINK_CHANNEL = first(COLD_DRINK_CHANNEL),
     TRADE_CHANNEL = first(TRADE_CHANNEL),
     SUB_TRADE_CHANNEL = first(SUB_TRADE_CHANNEL),
@@ -422,31 +422,31 @@ BYMONTH_Customer_No_Retailer <- UnaggregatedDates_Customer_No_Retailer %>%
     FIRST_DELIVERY_YEAR = min(FIRST_DELIVERY_YEAR),
     ON_BOARDING_DATE = min(ON_BOARDING_DATE),
     ON_BOARDING_YEAR = min(ON_BOARDING_YEAR),
-    customer_age = as.numeric(format(Sys.Date(), "%Y")) - ON_BOARDING_YEAR,
+    customer_age = as.numeric(format(Sys.Date(), "%Y")) - min(ON_BOARDING_YEAR),
             
-    LOCAL_MARKET_PARTNER = LOCAL_MARKET_PARTNER[which.max(tabulate(match(LOCAL_MARKET_PARTNER,unique(LOCAL_MARKET_PARTNER))))],
-    CO2_CUSTOMER =  CO2_CUSTOMER[which.max(tabulate(match(CO2_CUSTOMER, unique(CO2_CUSTOMER))))],
+    LOCAL_MARKET_PARTNER = first(LOCAL_MARKET_PARTNER),  # simplified
+    CO2_CUSTOMER = first(CO2_CUSTOMER),  # simplified
     
-    hasOrderedCases = as.integer(case_when((orderedCases)>0 ~1, TRUE ~ 0)),
+    hasOrderedCases = as.integer(sum(orderedCases) > 0),
             
-    propCases = sum(orderedCases)/ sum(totalOrdered),
+    propCases = sum(orderedCases) / sum(totalOrdered),
     
-    zip_code =  first(ZIP), 
-            
-    city =  first(City),
-
-    state =  first(`State Name`), 
-
+    zip_code = first(ZIP), 
+    city = first(City),
+    state = first(`State Name`), 
     region = first(cluster),
-             
     distance_from_centroid = first(distance_to_centroid),
+    
     orderedCases = sum(orderedCases),
     orderedGallons = sum(orderedGallons),
     totalOrdered = sum(totalOrdered)) 
 
 ```
 
+
 Maybe the issue I am having is that the data is still in long mode, no column of orders y quarter. What would be better?
+Another issue with this is that I am filtering out retail customers that only have one outlet
+Need to replace porpcases Nan because there is nothing
 
 ```{r}
 BYQUARTER_Customer_No_Retailer <- UnaggregatedDates_Customer_No_Retailer %>% 
