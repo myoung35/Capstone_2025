@@ -444,9 +444,10 @@ BYMONTH_Customer_No_Retailer <- UnaggregatedDates_Customer_No_Retailer %>%
 ```
 
 
-Maybe the issue I am having is that the data is still in long mode, no column of orders y quarter. What would be better?
-Another issue with this is that I am filtering out retail customers that only have one outlet
-Need to replace porpcases Nan because there is nothing
+Need to replace propcases Nan because there is nothing
+Also not sure if because the Q and M/Y columns are seperate how we will do with the time series?
+predict total ordered for the next period
+create bins column to say if they met target/or our threshbins
 
 ```{r}
 BYQUARTER_Customer_No_Retailer <- UnaggregatedDates_Customer_No_Retailer %>% 
