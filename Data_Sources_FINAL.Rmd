@@ -14,7 +14,7 @@ editor_options:
 
 
 ```{r}
-pacman::p_load(tidyverse, scales, dplyr, corrr, janitor, tidyr, psych, readr, lubridate, rpart, rpart.plot, caret, C50, sf, maps, dbscan, geosphere, nnet, randomForest,readxl)
+pacman::p_load(tidyverse, scales, dplyr, corrr, janitor, tidyr, psych, readr, lubridate, rpart, rpart.plot, caret, C50, sf, maps, dbscan, geosphere, nnet, randomForest,readxl, tsibble, ggplot2, forecast, tseries)
 ```
 
 # Load Orignal Data
@@ -211,12 +211,12 @@ Annual_Customer_No_Retailer <- Annual_Customer_No_Retailer %>%
             percentChangeYOY = ((total_ordered_2024) - (total_ordered_2023))/(total_ordered_2023)) %>% 
   mutate(Binning_column = case_when(
     (total_ordered_2023 < 400 & total_ordered_2024 < 400) & percentChangeYOY < 0.10 ~ "low volume low growth",
-         (total_ordered_2023 < 400 & total_ordered_2024 < 400) & percentChangeYOY > 0.10 ~ "low volume high growth",
+         (total_ordered_2023 < 400 & total_ordered_2024 < 400) & percentChangeYOY >= 0.10 ~ "low volume high growth",
          (total_ordered_2023 > 400 & total_ordered_2024 > 400) & percentChangeYOY < 0.05 ~ "high volume low growth",
-         (total_ordered_2023 > 400 & total_ordered_2024 > 400) & percentChangeYOY > 0.05 ~ "high volume high growth",
-         (total_ordered_2023 > 400 | total_ordered_2024 > 400) & percentChangeYOY > 0 ~ "transtionary growing ",
-         (total_ordered_2023 > 400 | total_ordered_2024 > 400) & percentChangeYOY < 0 ~ "transitionary declining" )) %>% 
-  filter(numberOfOutlets == 1)
+         (total_ordered_2023 > 400 & total_ordered_2024 > 400) & percentChangeYOY >=0.05 ~ "high volume high growth",
+         (total_ordered_2023 >= 400 | total_ordered_2024 >= 400) & percentChangeYOY > 0 ~ "transtionary growing",
+         (total_ordered_2023 >= 400 | total_ordered_2024 >= 400) & percentChangeYOY <= 0 ~ "transitionary declining" )) %>% 
+  filter(numberOfOutlets == 1) 
 
 ```
 
@@ -329,8 +329,8 @@ Annual_Customer_Retailer <- Annual_Customer_Retailer %>%
          (total_ordered_2023 < 400 & total_ordered_2024 < 400) & percentChangeYOY > 0.10 ~ "low volume high growth",
          (total_ordered_2023 > 400 & total_ordered_2024 > 400) & percentChangeYOY < 0.05 ~ "high volume low growth",
          (total_ordered_2023 > 400 & total_ordered_2024 > 400) & percentChangeYOY > 0.05 ~ "high volume high growth",
-         (total_ordered_2023 > 400 | total_ordered_2024 > 400) & percentChangeYOY > 0 ~ "transtionary growing ",
-         (total_ordered_2023 > 400 | total_ordered_2024 > 400) & percentChangeYOY < 0 ~ "transitionary declining" )) %>% 
+         (total_ordered_2023 >= 400 | total_ordered_2024 >= 400) & percentChangeYOY > 0 ~ "transtionary growing",
+         (total_ordered_2023 >= 400 | total_ordered_2024 >= 400) & percentChangeYOY < 0 ~ "transitionary declining" )) %>% 
   filter(numberOfOutlets > 1)
 ```
 
@@ -397,6 +397,7 @@ customer_reference <- UnaggregatedDates_Customer_No_Retailer %>%
   )
 
 # Now join the transactions with all_months first, then join with customer reference
+
 UnaggregatedDates_Customer_No_Retailer <- all_months %>%
   left_join(
     UnaggregatedDates_Customer_No_Retailer %>% 
@@ -406,6 +407,7 @@ UnaggregatedDates_Customer_No_Retailer <- all_months %>%
   mutate(across(c(orderedCases, orderedGallons, totalOrdered), ~ replace_na(.x, 0))) %>%
   # Join with the customer reference data
   left_join(customer_reference, by = "CUSTOMER_NUMBER")
+
 ```
 
 
@@ -413,7 +415,7 @@ UnaggregatedDates_Customer_No_Retailer <- all_months %>%
 BYMONTH_Customer_No_Retailer <- UnaggregatedDates_Customer_No_Retailer %>% 
   filter(is.na(PRIMARY_GROUP_NUMBER)) %>% 
   group_by(Entity_ID, YEAR, MONTH) %>% 
-  summarize(
+  reframe(
     FREQUENT_ORDER_TYPE = first(FREQUENT_ORDER_TYPE),  # simplified
     COLD_DRINK_CHANNEL = first(COLD_DRINK_CHANNEL),
     TRADE_CHANNEL = first(TRADE_CHANNEL),
@@ -439,7 +441,9 @@ BYMONTH_Customer_No_Retailer <- UnaggregatedDates_Customer_No_Retailer %>%
     
     orderedCases = sum(orderedCases),
     orderedGallons = sum(orderedGallons),
-    totalOrdered = sum(totalOrdered)) 
+    totalOrdered = sum(totalOrdered)) %>% 
+     mutate(date = as.Date(paste(MONTH, 1, YEAR, sep = "/"), 
+                        format="%m/%d/%Y"))
 
 ```
 
@@ -453,7 +457,7 @@ create bins column to say if they met target/or our threshbins
 BYQUARTER_Customer_No_Retailer <- UnaggregatedDates_Customer_No_Retailer %>% 
   filter(is.na(PRIMARY_GROUP_NUMBER)) %>% 
   group_by(Entity_ID, Quarter_year.x) %>% 
-  summarize(
+  reframe(
     FREQUENT_ORDER_TYPE = FREQUENT_ORDER_TYPE[which.max(tabulate(match(FREQUENT_ORDER_TYPE, unique(FREQUENT_ORDER_TYPE))))],
     COLD_DRINK_CHANNEL = first(COLD_DRINK_CHANNEL),
     TRADE_CHANNEL = first(TRADE_CHANNEL),
@@ -482,6 +486,937 @@ BYQUARTER_Customer_No_Retailer <- UnaggregatedDates_Customer_No_Retailer %>%
     distance_from_centroid = first(distance_to_centroid),
     orderedCases = sum(orderedCases),
     orderedGallons = sum(orderedGallons),
-    totalOrdered = sum(totalOrdered)) 
+    totalOrdered = sum(totalOrdered)) %>% 
+   mutate(date = as.Date(paste0((as.integer(sub(" .*", "", Quarter_year.x)) - 1) * 3 + 1, 
+                               "/1/", sub(".* ", "", Quarter_year.x)), 
+                        format="%m/%d/%Y")) 
+  
 
 ```
+
+# Quarter modeling V1 - Nothing here
+
+## Split into Train and Test
+```{r}
+set.seed(123)
+
+train_set <- BYQUARTER_Customer_No_Retailer %>% 
+  filter(Quarter_year.x != '4 2024') %>%
+  select(date, totalOrdered)
+
+train_set_extraVariables <- BYQUARTER_Customer_No_Retailer %>% 
+  filter(Quarter_year.x != '4 2024')
+
+#12% of the data 
+test_set <- BYQUARTER_Customer_No_Retailer %>% 
+  filter(Quarter_year.x == '4 2024')
+
+
+```
+
+```{r}
+train_set %>% ggplot()+
+  geom_line(aes(x = date, y = totalOrdered))
+```
+
+```{r}
+adf.test(diff(log(train_set$totalOrdered)), alternative = "stationary", k = 0)
+```
+
+
+
+```{r}
+view(mts)
+mts <- ts(train_set$totalOrdered, start = c(2023,1,1), frequency = 4)
+
+
+model <- auto.arima(mts)
+
+summary(model)
+model
+
+
+forecast(model, 5)
+plot(forecast(model,5))
+
+
+
+```
+
+```{r}
+autoplot(mts)
+```
+
+
+higher sigma^2 is the variance of residuals. higher value means more noise or variability
+
+log liklihood is a measure of how well the model fits the data. less negative would mean a better fit. 
+
+AIC = Akaike information Criterion. this penalizes for having more complexity or more parameters. lower AIC indicate a better fit
+
+BIC = Bayesian information criterion. with stronger penalty for models with more parameters. lower is a better fit
+
+This model sucks and basically tells us we cannot predict the next quarter based on the current information
+
+I want to add in  the other variables to make the model more able to predict by customer
+
+```{r}
+#make a matrix for extra variables
+
+xreg <- cbind(
+  FREQUENT_ORDER_TYPE = train_set_extraVariables$FREQUENT_ORDER_TYPE,
+  COLD_DRINK_CHANNEL = train_set_extraVariables$COLD_DRINK_CHANNEL,
+  TRADE_CHANNEL = train_set_extraVariables$TRADE_CHANNEL,
+  FIRST_DELIVERY_YEAR = train_set_extraVariables$FIRST_DELIVERY_YEAR,
+  ON_BOARDING_YEAR = train_set_extraVariables$ON_BOARDING_YEAR,
+  customer_age = train_set_extraVariables$customer_age,
+  LOCAL_MARKET_PARTNER = train_set_extraVariables$LOCAL_MARKET_PARTNER,
+  CO2_CUSTOMER = train_set_extraVariables$CO2_CUSTOMER,
+  hasOrderedCases = train_set_extraVariables$hasOrderedCases,
+  propCases = train_set_extraVariables$propCases,
+  distance_from_centroid = train_set_extraVariables$distance_from_centroid,
+  Q1 = as.numeric(quarter(train_set_extraVariables$date)==1),
+  Q2 = as.numeric(quarter(train_set_extraVariables$date)==2),
+  Q3 = as.numeric(quarter(train_set_extraVariables$date)==3)
+)
+
+
+```
+
+
+```{r}
+arimax_model <- auto.arima(mts, xreg = xreg)
+
+arimax_model
+summary(arimax_model)
+
+```
+It does not seem that this model performs any better
+
+I feel like I have no idea what I am doing with the Arima model
+
+
+# Monthly Modeling
+
+```{r}
+BYMONTH_Customer_No_Retailer %>% 
+  group_by(date) %>% 
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%  # Aggregate properly
+  ggplot(aes(x = date, y = totalOrdered, group = 1)) +
+  geom_line() +  # Connect points with a line
+  geom_point() +  # Show actual data points
+  scale_x_date(date_breaks = "1 month", date_labels = "%Y-%m") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+```{r}
+ts_data <- BYMONTH_Customer_No_Retailer %>% 
+  group_by(date) %>%
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%
+  arrange(date) %>%  # Ensure data is ordered by time
+  pull(totalOrdered) %>%  # Extract the numeric vector
+  ts(start = c(year(min(BYMONTH_Customer_No_Retailer$date)), month(min(BYMONTH_Customer_No_Retailer$date))), 
+     frequency = 12) 
+```
+
+```{r}
+adf.test(ts_data)
+```
+
+Data is not stationary. 
+
+```{r}
+adf.test(diff(ts_data, differences = 3))
+```
+
+difference of 3 is sufficent to make my data stationary
+d=1 removes linear trends
+d=2 removes quadraitc trends
+d = 3 removes cubic trends
+
+a diff of 3 might mean that my data is too seasonal to make. I will try laging 
+```{r}
+adf.test(diff(ts_data, lag=12))
+
+autoplot(ts_data)
+
+decomposed <- decompose(ts_data, type = "additive")
+autoplot(decomposed)
+
+#If I see spikes at lag 12, my data has seasonality
+Acf(ts_data, lag.max = 36)
+```
+```{r}
+adf.test(diff(ts_data, lag=14))
+```
+
+This gives me stationary data
+
+```{r}
+modelSeasonal <- auto.arima(ts_data, seasonal = TRUE)
+
+summary(modelSeasonal)
+```
+
+This Arima model is looking a lot better. sigma^2 is lower, log likelihood is less negative. 
+
+
+Let me check out if removing the over 10K orders 
+
+
+```{r}
+ts_data2 <- BYMONTH_Customer_No_Retailer %>% 
+  group_by(Entity_ID) %>% 
+  mutate(totalOrderedCust = sum(totalOrdered)) %>% 
+  filter(totalOrderedCust < 10000) %>% 
+  ungroup() %>% 
+  group_by(date) %>%
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%
+  arrange(date) %>%  # Ensure data is ordered by time
+  pull(totalOrdered) %>%  # Extract the numeric vector
+  ts(start = c(year(min(BYMONTH_Customer_No_Retailer$date)), month(min(BYMONTH_Customer_No_Retailer$date))), 
+     frequency = 12) 
+```
+
+```{r}
+adf.test(ts_data2)
+
+#followed same trend as unfiltered data
+adf.test(diff(ts_data2, lag = 14))
+```
+
+```{r}
+modelSeasonal2 <- auto.arima(ts_data2, seasonal = TRUE)
+
+summary(modelSeasonal2)
+```
+a little better, but really close to the above model. almost like the seasonality is unchanged for large and small customers?
+
+I think I want to do linear regression instead
+
+```{r}
+lmModelDATA <- BYMONTH_Customer_No_Retailer %>% 
+  group_by(Entity_ID) %>% 
+  mutate(totalOrderedCust = sum(totalOrdered)) %>% 
+  filter(totalOrderedCust < 10000) %>% 
+  ungroup() %>% 
+  mutate(across(c(propCases), ~ replace_na(.x, 0)))
+  
+
+```
+
+```{r}
+lm1 <- lm(totalOrdered ~ FREQUENT_ORDER_TYPE+ COLD_DRINK_CHANNEL+ TRADE_CHANNEL+ customer_age+ LOCAL_MARKET_PARTNER+ CO2_CUSTOMER+ propCases+ distance_from_centroid ,lmModelDATA)
+
+summary(lm1)
+```
+
+this model actually has a reasonable intercept. a lot of variables are significant. Local market partner is interesting. if they are, then it is a decrease in orders. However, my R2 value is very low
+
+add a timer series object
+
+```{r}
+ts_orders <- ts(lmModelDATA$totalOrdered, frequency = 12)
+decomposed <- decompose(ts_orders)
+
+lmModelDATA$seasonal_component <- decomposed$seasonal
+lmModelDATA$trend_component <- decomposed$trend
+```
+
+```{r}
+lm2 <- lm(totalOrdered ~ FREQUENT_ORDER_TYPE+ COLD_DRINK_CHANNEL+ TRADE_CHANNEL+ customer_age+ LOCAL_MARKET_PARTNER+ CO2_CUSTOMER+ propCases+ distance_from_centroid + seasonal_component + trend_component ,lmModelDATA)
+
+summary(lm2)
+
+plot(lm2)
+```
+
+R value improved significantly with adding the trend components. They are significant, but do not increase order amounts much.
+
+I do not think the intercept makes sense that it starts with negative orders.
+
+I think the biggest things these time series models can tell me is that my customer will order differently in Q1 than they do in Q2
+
+
+# Quarterly Modeling V2
+
+```{r}
+BYQUARTER_Customer_No_Retailer %>% 
+  group_by(date) %>% 
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%  # Aggregate properly
+  ggplot(aes(x = date, y = totalOrdered, group = 1)) +
+  geom_line() +  # Connect points with a line
+  geom_point() +  # Show actual data points
+  scale_x_date(date_breaks = "1 month", date_labels = "%Y-%m") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+
+
+```{r}
+BYQUARTER_Customer_No_Retailer$quarter <- quarter(BYQUARTER_Customer_No_Retailer$date)
+BYQUARTER_Customer_No_Retailer$quarter <- factor(paste0("Q", BYQUARTER_Customer_No_Retailer$quarter))
+
+
+lmQuarterly <- lm(totalOrdered ~ FREQUENT_ORDER_TYPE + COLD_DRINK_CHANNEL + TRADE_CHANNEL + customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + distance_from_centroid + quarter , data = BYQUARTER_Customer_No_Retailer)
+
+
+summary(lmQuarterly)
+```
+
+smaller by quarter impact than I would like to see. also low R2
+
+I did not remove the above 10K lets see the difference
+
+```{r}
+lmModelDATAQ <- BYQUARTER_Customer_No_Retailer %>% 
+  group_by(Entity_ID) %>% 
+  mutate(totalOrderedCust = sum(totalOrdered)) %>% 
+  filter(totalOrderedCust < 10000) %>% 
+  ungroup() %>% 
+  mutate(across(c(propCases), ~ replace_na(.x, 0)))
+```
+
+```{r}
+lmQuarterly2 <- lm(totalOrdered ~ FREQUENT_ORDER_TYPE + COLD_DRINK_CHANNEL + TRADE_CHANNEL + customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + distance_from_centroid + quarter , data = lmModelDATAQ)
+
+
+summary(lmQuarterly2)
+```
+my variables are showing more of an impactand I have lots of significance but, my R2 went down when I filtered out high order customers. 
+
+
+Try squaring some variables (create a curved line relationship instead of linear)
+```{r}
+lmModelDATAQ$customer_age_squared <- lmModelDATAQ$customer_age^2
+
+lmQuarterly3 <- lm(totalOrdered ~ FREQUENT_ORDER_TYPE + COLD_DRINK_CHANNEL + TRADE_CHANNEL + customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + log(distance_from_centroid + 1) + quarter , data = lmModelDATAQ)
+
+
+summary(lmQuarterly3)
+```
+
+squaring literally brought my R2 down. Logging also did not improve my R2
+
+There is clearly a quarterly trend in ordering I want to capture.  I will try and ARIMA and a regression combined
+
+
+```{r}
+ts_dataQ <- BYQUARTER_Customer_No_Retailer %>% 
+  group_by(date) %>%
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%
+  arrange(date) %>%  # Ensure data is ordered by time
+  pull(totalOrdered) %>%  # Extract the numeric vector
+  ts(start = c(year(min(BYQUARTER_Customer_No_Retailer$date)), month(min(BYQUARTER_Customer_No_Retailer$date))), 
+     frequency = 4) 
+```
+
+```{r}
+autoplot(ts_dataQ)
+```
+
+
+```{r}
+adf.test(ts_dataQ)
+```
+
+data is stationary NO differencing!!! this means that the data does not have trends or seasonailty that would make it difficut to predict. What I clearly see from the graph. there is one quarter each year where ordering takes place and we can predict that
+
+```{r}
+
+acf(ts_dataQ) # 1 significant spike q= 1
+pacf(ts_dataQ) # 0 significant spike p= 0
+QArima <- arima(ts_dataQ, order = c(0,0,1))
+
+summary(QArima)
+
+#the above model is better
+QArimaAuto <- auto.arima(ts_dataQ)
+summary(QArimaAuto)
+```
+**for the specified arima**
+1. Coefficients:
+ma1 (-0.9980): This is the first-order moving average coefficient. A value close to -1 suggests that the series has strong negative autocorrelation at lag 1, meaning that an increase in one period tends to be followed by a decrease in the next.
+
+Intercept (4,369,738.19): This represents the mean level of the series (assuming no differencing was applied).
+
+2. Standard Errors (s.e.):
+ma1 standard error (0.4149): Measures the uncertainty around the MA(1) estimate.
+
+Intercept standard error (48,231.29): Suggests that the intercept estimate has a relatively small uncertainty compared to its magnitude.
+
+3. Model Fit Metrics:
+sigma² (1.398e+11): This is the estimated variance of the residuals.
+
+Log-likelihood (-115.1): Higher values (less negative) suggest a better fit.
+
+AIC (236.19): A lower AIC indicates a better model fit relative to others.
+
+4. Training Set Error Measures:
+ME (-86,206.46): Mean error, showing a slight underestimation bias.
+
+RMSE (373,931.1): Measures how much the predicted values deviate from actual values on average.
+
+MAE (346,158.9): Mean absolute error, showing the typical size of forecast errors.
+
+MPE (-2.70%): Mean percentage error, indicating the direction of bias (slight underestimation).
+
+MAPE (8.11%): Mean absolute percentage error, meaning your model's predictions are, on average, 8.11% off.
+
+MASE (0.5429): Mean absolute scaled error; values below 1 suggest better performance than a naive forecast.
+
+ACF1 (0.1830): Autocorrelation of residuals at lag 1. A low value suggests that residuals are fairly uncorrelated (which is good).
+
+Interpretation:
+Your MA(1) coefficient is close to -1, suggesting strong negative autocorrelation.
+
+The AIC is reasonable, though you might want to compare it with other models (e.g., ARIMA(1,0,1), ARIMA(0,1,1)).
+
+The MAPE of 8.11% indicates a fairly good predictive performance.
+
+The residual autocorrelation (ACF1 = 0.183) is low, which means the model does not leave much pattern in the residuals.
+
+
+
+okay great, my quarterly arima does look good. but it does not have much complexity by customer (to my understanding) I want to combine it with a regression and see where we get
+
+```{r}
+exog_variables  <- BYQUARTER_Customer_No_Retailer %>% 
+  group_by(date) %>%
+  summarize(
+     FREQUENT_ORDER_TYPE = names(which.max(table(FREQUENT_ORDER_TYPE))),  # Select most frequent category
+    COLD_DRINK_CHANNEL = names(which.max(table(COLD_DRINK_CHANNEL))),
+    TRADE_CHANNEL = names(which.max(table(TRADE_CHANNEL))),
+    customer_age = mean(customer_age, na.rm = TRUE),
+    LOCAL_MARKET_PARTNER = max(LOCAL_MARKET_PARTNER, na.rm = TRUE),
+    CO2_CUSTOMER = max(CO2_CUSTOMER, na.rm = TRUE),
+    propCases = mean(propCases, na.rm = TRUE),
+    distance_from_centroid = mean(distance_from_centroid, na.rm = TRUE))
+```
+
+```{r}
+exog_matrix <- exog_variables %>%
+  select(-date) %>% 
+  as.matrix
+
+arima_with_regression <- arima(ts_dataQ, xreg = exog_matrix, order= c(0,0,1))
+```
+## Quarterly with customer?
+pretty good model here. even better than my Arima quarterly, except this is just for the first customer in my databse
+
+```{r}
+# Prepare the data
+arima_data <- BYQUARTER_Customer_No_Retailer %>% 
+  group_by(date, Entity_ID) %>%
+  summarize(
+    totalOrdered = sum(totalOrdered, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  arrange(Entity_ID, date)
+
+# Create time series for total orders
+ts_data <- arima_data %>%
+  filter(Entity_ID == first(Entity_ID)) %>%
+  pull(totalOrdered) %>%
+  ts(start = c(year(min(arima_data$date)), 
+               quarter(min(arima_data$date))), 
+     frequency = 4)
+
+# Fit basic ARIMA model
+arima_model <- auto.arima(diff(ts_data))
+
+# Summary of the model
+summary(arima_model)
+
+adf.test(diff(ts_data))
+```
+
+I guess I just dont understand how to add in the regression piece because it looks like it has a model for each individual customer, but I cant have that if I doing want over fit. 
+
+## Create a quarterly regression with bin as a predictor
+```{r}
+BYQUARTER_Customer_No_Retailer <- BYQUARTER_Customer_No_Retailer %>% 
+  left_join(Annual_Customer_No_Retailer %>% select(Entity_ID, Binning_column), by = "Entity_ID")
+```
+
+
+Bringing in my binning is actually improving the model. 
+
+```{r}
+lmQuarterly2 <- lm((totalOrdered) ~ FREQUENT_ORDER_TYPE + COLD_DRINK_CHANNEL + TRADE_CHANNEL + customer_age + LOCAL_MARKET_PARTNER*CO2_CUSTOMER + propCases + distance_from_centroid + quarter +Binning_column , data = BYQUARTER_Customer_No_Retailer)
+
+
+summary(lmQuarterly2)
+```
+logging total orders significantly improves my models R2.
+
+This intercept is very good to me at 195 gallons
+
+### Quarterly Log Regression 0.52 R2
+```{r}
+lmQuarterly3 <- lm(log(totalOrdered) ~ FREQUENT_ORDER_TYPE + COLD_DRINK_CHANNEL + TRADE_CHANNEL + customer_age + LOCAL_MARKET_PARTNER*CO2_CUSTOMER + propCases + distance_from_centroid + quarter +Binning_column , data = BYQUARTER_Customer_No_Retailer)
+
+
+summary(lmQuarterly3)
+```
+I want to now just do more data analysis in the bins
+
+- Does the seasonality hold true in all buckets?
+- How many local market partners are in low growth, low volume buckets
+  - proportion that order CO2 compared to high performing local market partners
+ 
+# Bin Data Analysis  
+```{r}
+ByQuarter2 <- BYQUARTER_Customer_No_Retailer %>% 
+  group_by(Entity_ID) %>% 
+  mutate(totalOrderedCust = sum(totalOrdered)) %>% 
+  filter(totalOrderedCust != 0) %>% 
+  filter(!is.na(Binning_column)) %>% #These are the customers with a first delivery date but no orders 
+  ungroup()
+
+unique(ByQuarter2$Binning_column)
+```
+
+## Low Volume Low Growth
+```{r}
+ByQuarterLVLG <-  ByQuarter2 %>% 
+  filter(Binning_column == 'low volume low growth')
+```
+
+### LVLG Trend line  
+```{r}
+ByQuarterLVLG %>% 
+  group_by(date) %>% 
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%  # Aggregate properly
+  ggplot(aes(x = date, y = totalOrdered, group = 1)) +
+  geom_line() +  # Connect points with a line
+  geom_point() +  # Show actual data points
+  scale_x_date(date_breaks = "1 month", date_labels = "%Y-%m") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+Interesting trend for low volume low growth customers. We still see a higher order amount in  Q2 in both years. Except it almost seems like they are just not ordering any more. Like the spike is minimal the drop off is steep
+
+low growth is anything less than 10% 
+
+I wonder how many customers are low volume and have negative growth
+There are 6,541 customers that are LVLG and have a negative percentage change
+```{r}
+Annual_Customer_No_Retailer %>% 
+  filter(Binning_column == 'low volume low growth' & percentChangeYOY < 0) %>% 
+  pull(percentChangeYOY) %>% 
+  mean()
+
+```
+Average low growth is a decline of 38.5% 
+Median is a decline of 30.3%
+### LVLG CO2/LPM analysis  
+```{r}
+ByQuarterLVLG %>% 
+  group_by(LOCAL_MARKET_PARTNER, CO2_CUSTOMER) %>% 
+  summarise(unique_count = n_distinct(Entity_ID), .groups = "drop") %>% 
+  mutate(proportion = unique_count / sum(unique_count)) 
+```
+  
+  wow so many LVLG customers that are lpm. 97% of this group is LMP. 89% of the full data set are LMP. so this group does show additional heaviness. 
+  
+CO2 customers is a 50/50 split in LVLG customers. So we have a higher proportion of the full CO2 customers database that are LVLG, but a lower proportion  of them are local market partners. Which is a hypothetically good thing right, like if we want our LMP to be well performing and be ordering CO2, we at least see that there are less LMP's that do order CO2 are LVLG (50% vs 88%) We have more non local market partners that order CO2 in this bin
+
+### LVLG Cases versus gallons
+I wonder if we see a decline in cases more than gallons in this group  
+```{r}
+Annual_Customer_No_Retailer %>% 
+  filter(Binning_column == 'low volume low growth' & percentChangeYOY < 0) %>% 
+  ggplot()+
+  geom_point(aes(x=propCases, y = percentChangeYOY))
+```
+There does seem to be a cluster of lower precentchange YOY and a lower proportion of cases ordered. So are customers that order cases more volitile than customers that order gallons?
+
+### LVLG On boarding year
+I want to see the most common on boarding year or customer age in this group  
+```{r}
+ByQuarterLVLG %>% 
+  distinct(Entity_ID, customer_age) %>% 
+  ggplot(aes(x=customer_age)) +
+  geom_histogram() +
+  theme_minimal()
+
+ByQuarterLVLG %>% 
+  distinct(Entity_ID, ON_BOARDING_YEAR) %>% 
+  ggplot(aes(x=factor(ON_BOARDING_YEAR))) +
+  geom_bar() +
+  theme_minimal()
+```
+On average these customers are 9.6 years old. the median is 7. it looks like most are young customers though, from 2022. Actually a really interesting spike there. I wonder if most 2022 customers are declining
+  
+How well can we predict this data?
+```{r regression no log}
+
+lmQuarterlyLVLG <- lm((totalOrdered) ~ FREQUENT_ORDER_TYPE + COLD_DRINK_CHANNEL + TRADE_CHANNEL + customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + distance_from_centroid + quarter , data = ByQuarterLVLG)
+
+
+summary(lmQuarterlyLVLG)
+```
+  No this is really bad. Logging it does not really improve my model. Interesting that we lose the ability to predict with more segmentation in this group. 
+  
+```{r regression with log}
+
+lmQuarterlyLVLG2 <- lm(log(totalOrdered) ~ FREQUENT_ORDER_TYPE + COLD_DRINK_CHANNEL + TRADE_CHANNEL + customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + distance_from_centroid + quarter , data = ByQuarterLVLG)
+
+
+summary(lmQuarterlyLVLG2)
+```
+  
+## Low Volume High Growth
+
+
+```{r}
+ByQuarterLVHG <-  ByQuarter2 %>% 
+  filter(Binning_column == 'low volume high growth')
+```
+  
+```{r}
+ByQuarterLVHG %>% 
+  group_by(date) %>% 
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%  # Aggregate properly
+  ggplot(aes(x = date, y = totalOrdered, group = 1)) +
+  geom_line() +  # Connect points with a line
+  geom_point() +  # Show actual data points
+  scale_x_date(date_breaks = "1 month", date_labels = "%Y-%m") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+okay we would expect such a high spike in this group. It looks like there is the trend of more orders in Q3 in both years as well. Although we do see high order amounts in Q1 and Q2 as well. Almost like this group is ramping up. Maybe it will level out eventually?
+
+I wonder if more of this group has a sooner on boarded date and that could be why we see such large growth in 2024?
+
+### LVHG  Onboarding year
+```{r}
+ByQuarterLVHG %>% 
+  distinct(Entity_ID, ON_BOARDING_YEAR) %>% 
+  ggplot(aes(x=factor(ON_BOARDING_YEAR))) +
+  geom_bar() +
+  theme_minimal()
+```
+okay yeah, so many of these customers were onboarded in the last year or two. Which means all those 2024 are shoing infinte growth. 
+
+I want to see the trend line without these 2024 customers
+
+```{r}
+ByQuarterLVHG %>% 
+  filter(ON_BOARDING_YEAR <= 2022) %>% 
+  group_by(date) %>% 
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%  # Aggregate properly
+  ggplot(aes(x = date, y = totalOrdered, group = 1)) +
+  geom_line() +  # Connect points with a line
+  geom_point() +  # Show actual data points
+  scale_x_date(date_breaks = "1 month", date_labels = "%Y-%m") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+
+Actually the customers with onboarding date less than 2023 have a higher cumulative order volume in Q3. I do see a huge dip in Q4. I do see the same Q3 trend. But the spike is impressive for this group still. Definitly something here in that these custoemrs are growing for some reason. I wonder which on boarding year customers are growing the most?
+
+I wonder if we can determine how soon after their onboarding date they will be delivered to? because it seems like from this graph that customers on boarded right still wait until Q3 for delivery
+```{r}
+ByQuarterLVHG %>% 
+  filter(ON_BOARDING_YEAR == 2024) %>% 
+  group_by(date) %>% 
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%  # Aggregate properly
+  ggplot(aes(x = date, y = totalOrdered, group = 1)) +
+  geom_line() +  # Connect points with a line
+  geom_point() +  # Show actual data points
+  scale_x_date(date_breaks = "1 month", date_labels = "%Y-%m") + 
+  theme_minimal() +
+  them
+```
+
+
+```{r}
+ByQuarterLVHG %>% 
+  filter(ON_BOARDING_YEAR<=2022) %>% 
+  group_by(ON_BOARDING_YEAR) %>% 
+  summarise(unique_count = n_distinct(Entity_ID)) %>% 
+  arrange(unique_count)
+  
+
+```
+
+just an increasing trend I guess. The older the customer the less likely they are to be a low volumne, high growth customer. makes me think customers are only low volume for x number of years. I would be curious to see more historical data on these old old customers that are growing significantly yoy are are still lv. did they ever have high volume? did they experience a lapse? do some customers just only order sparadoicly? 
+
+```{r}
+Annual_Customer_No_Retailer %>% 
+  filter(Binning_column == 'low volume high growth' & ON_BOARDING_YEAR<=2022 & percentChangeYOY != Inf) %>% 
+  pull(percentChangeYOY) %>% 
+  mean()
+
+```
+Wow average growth is 92% excluding Inf growth customers AND customers less than equal to 2022. Median is lower at 36%. Still really high growth in this group of customers
+
+### LVHG CO2/LPM analysis  
+```{r}
+ByQuarterLVHG %>% 
+  group_by(LOCAL_MARKET_PARTNER, CO2_CUSTOMER) %>% 
+  summarise(unique_count = n_distinct(Entity_ID), .groups = "drop") %>% 
+  mutate(proportion = unique_count / sum(unique_count)) 
+```
+98.4% of this group are local market partners. Again seeing a higher proprtion of LPM's under performing. Seeing that we are capturing the LMP in the low performing groups that are NOT CO2 customers. Most CO2 customers are LMPs, so in both this group and LVLG group we are seeing an even proportion of LMP that are and are not CO2. Which means potentially that that LMP that have CO2 are the high performing LMP
+
+### LVHG Cases versus gallons
+I wonder if we see a decline in cases more than gallons in this group  
+```{r}
+Annual_Customer_No_Retailer %>% 
+  filter(Binning_column == 'low volume high growth' & ON_BOARDING_YEAR<=2022) %>% 
+  ggplot()+
+  geom_point(aes(x=propCases, y = percentChangeYOY))
+```
+No correlation with growth and number of cases ordered it looks like. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+```{r}
+CustomerProfileData %>% 
+  count(LOCAL_MARKET_PARTNER, CO2_CUSTOMER) %>% 
+  mutate(proportion = n / sum(n))
+```
+88% of full database are both CO2 customers and LMPs. So this means that most CO2 customers are LMP
+39% of full database are CO2 customers
+89% of full database are LMP
+
+```{r}
+CustomerProfileData %>% 
+  filter(year(ON_BOARDING_DATE)==2022) %>% 
+  count(n_distinct(Entity_ID))
+```
+
+
+### LVHG Arima modeling
+```{r}
+ts_dataLVHG <- ByQuarterLVHG %>% 
+  group_by(date) %>%
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%
+  arrange(date) %>%  # Ensure data is ordered by time
+  pull(totalOrdered) %>%  # Extract the numeric vector
+  ts(start = c(year(min(BYQUARTER_Customer_No_Retailer$date)), month(min(BYQUARTER_Customer_No_Retailer$date))), 
+     frequency = 4) 
+```
+
+```{r}
+autoplot(ts_dataLVHG)
+```
+
+
+```{r}
+adf.test(ts_dataLVHG)
+```
+
+data is not stationary need to difference
+
+```{r}
+adf.test(diff(ts_dataLVHG, differences = 1))
+```
+
+differencing made it worse. I wonder if it is because of the cusotmers with no order history... Also cant do 2, or 3, I get NA. So that means I cant do an arima model without further transformation
+
+### Regression 
+```{r regression no log}
+
+lmQuarterlyLVHG <- lm(log(totalOrdered) ~ FREQUENT_ORDER_TYPE + COLD_DRINK_CHANNEL + TRADE_CHANNEL + customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + distance_from_centroid + quarter , data = ByQuarterLVHG)
+
+
+summary(lmQuarterlyLVHG)
+```
+
+log and no log this model is also pathetic on its own
+
+
+## High Volume High Growth Customers
+
+
+```{r}
+ByQuarterHVHG <-  ByQuarter2 %>% 
+  filter(Binning_column == 'high volume high growth')
+```
+
+### Seasonality graph 
+```{r}
+ByQuarterHVHG %>% 
+  group_by(date) %>% 
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%  # Aggregate properly
+  ggplot(aes(x = date, y = totalOrdered, group = 1)) +
+  geom_line() +  # Connect points with a line
+  geom_point() +  # Show actual data points
+  scale_x_date(date_breaks = "1 month", date_labels = "%Y-%m") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+
+HVHG shows trend in Q3 really clearly
+
+### On boarding year
+```{r}
+ByQuarterHVHG %>% 
+  distinct(Entity_ID, ON_BOARDING_YEAR) %>% 
+  ggplot(aes(x=factor(ON_BOARDING_YEAR))) +
+  geom_bar() +
+  theme_minimal()
+```
+
+### HVHG CO2/LPM analysis  
+```{r}
+ByQuarterHVHG %>% 
+  group_by(LOCAL_MARKET_PARTNER, CO2_CUSTOMER) %>% 
+  summarise(unique_count = n_distinct(Entity_ID), .groups = "drop") %>% 
+  mutate(proportion = unique_count / sum(unique_count)) 
+```
+Finally seeing some seperation. More customers in this bucket are both LMP and CO2 
+
+### Cases 
+```{r}
+Annual_Customer_No_Retailer %>% 
+  filter(Binning_column == 'high volume high growth') %>% 
+  ggplot()+
+  geom_point(aes(x=propCases, y = percentChangeYOY))
+```
+
+Again not a huge trend of ordering cases compared to the % growth yoy. I do see more higher % growth associated with more cases generally. And there is that one outlier. This is interesting because it is against the overall trend I have seen. I wonder what the coef would be in a regression model
+
+
+The coef is positive
+Also interesting hat the R2 became very high for this group (comparitively). It is interesting the R2 reflects the total data model I built
+```{r regression no log}
+
+lmQuarterlyHVHG <- lm((totalOrdered) ~ FREQUENT_ORDER_TYPE + COLD_DRINK_CHANNEL + TRADE_CHANNEL + customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + distance_from_centroid + quarter , data = ByQuarterHVHG)
+
+
+summary(lmQuarterlyHVHG)
+```
+
+### HVHG Arima modeling
+```{r}
+ts_dataHVHG <- ByQuarterHVHG %>% 
+  group_by(date) %>%
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%
+  arrange(date) %>%  # Ensure data is ordered by time
+  pull(totalOrdered) %>%  # Extract the numeric vector
+  ts(start = c(year(min(BYQUARTER_Customer_No_Retailer$date)), month(min(BYQUARTER_Customer_No_Retailer$date))), 
+     frequency = 4) 
+```
+
+```{r}
+adf.test(ts_dataHVHG)
+```
+
+
+This is the data that is stationary. I think this is the group that is driving all my other models
+
+```{r}
+acf(ts_dataHVHG) # 1 significant spike q= 1
+pacf(ts_dataHVHG) # 0 significant spike p= 0
+QArimaHVHG <- arima(ts_dataHVHG, order = c(0,0,1))
+
+summary(QArimaHVHG)
+```
+
+not a great model based on the sigma, but okay
+
+## High volume Low Growth
+```{r}
+ByQuarterHVLG <-  ByQuarter2 %>% 
+  filter(Binning_column == 'high volume low growth')
+```
+
+### Seasonality graph 
+```{r}
+ByQuarterHVLG %>% 
+  group_by(date) %>% 
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%  # Aggregate properly
+  ggplot(aes(x = date, y = totalOrdered, group = 1)) +
+  geom_line() +  # Connect points with a line
+  geom_point() +  # Show actual data points
+  scale_x_date(date_breaks = "1 month", date_labels = "%Y-%m") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+```
+
+We see the Q2/Q3 trend in this group..
+ interesting to see the drop off even though they are still well above threshold. especially in Q1 and Q4
+ 
+### On boarding year
+```{r}
+ByQuarterHVLG %>% 
+  distinct(Entity_ID, ON_BOARDING_YEAR) %>% 
+  ggplot(aes(x=factor(ON_BOARDING_YEAR))) +
+  geom_bar() +
+  theme_minimal()
+```
+
+2022 again. 2019 interestingly is also prominant in this group
+
+
+
+### HVLG CO2/LPM analysis  
+```{r}
+ByQuarterHVLG %>% 
+  group_by(LOCAL_MARKET_PARTNER, CO2_CUSTOMER) %>% 
+  summarise(unique_count = n_distinct(Entity_ID), .groups = "drop") %>% 
+  mutate(proportion = unique_count / sum(unique_count)) 
+```
+
+Again I see the segregation in proportion in high performing customers that are both LMP and have CO2
+
+
+### regression
+
+again this high performing group is really showing it is carrying the model predictions. logging makes it worse
+
+Q4 is not a significant predictor, only Q3 is at the 99
+```{r regression no log}
+
+lmQuarterlyHVLG <- lm((totalOrdered) ~ FREQUENT_ORDER_TYPE + COLD_DRINK_CHANNEL + TRADE_CHANNEL + customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + distance_from_centroid + quarter , data = ByQuarterHVLG)
+
+
+summary(lmQuarterlyHVLG)
+```
+
+### HVHG Arima modeling
+```{r}
+ts_dataHVLG <- ByQuarterHVLG %>% 
+  group_by(date) %>%
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%
+  arrange(date) %>%  # Ensure data is ordered by time
+  pull(totalOrdered) %>%  # Extract the numeric vector
+  ts(start = c(year(min(BYQUARTER_Customer_No_Retailer$date)), month(min(BYQUARTER_Customer_No_Retailer$date))), 
+     frequency = 4) 
+```
+
+```{r}
+adf.test(ts_dataHVLG)
+```
+
+This is the data that is stationary. I think this is the group that is driving all my other models
+
+```{r}
+acf(ts_dataHVLG) # 1 significant spike q= 1
+pacf(ts_dataHVLG) # 0 significant spike p= 0
+QArimaHVLG <- arima(ts_dataHVLG, order = c(0,0,1))
+
+summary(QArimaHVLG)
+```
+
+Another bad arima model go figure
