@@ -14,7 +14,7 @@ editor_options:
 
 
 ```{r}
-pacman::p_load(tidyverse, scales, dplyr, corrr, janitor, tidyr, psych, readr, lubridate, rpart, rpart.plot, caret, C50, sf, maps, dbscan, geosphere, nnet, randomForest,readxl, tsibble, ggplot2, forecast, tseries)
+pacman::p_load(tidyverse, scales, dplyr, corrr, janitor, tidyr, psych, readr, lubridate, rpart, rpart.plot, caret, C50, sf, maps, dbscan, geosphere, nnet, randomForest,readxl, tsibble, ggplot2, forecast, tseries, lme4, performance)
 ```
 
 # Load Orignal Data
@@ -741,16 +741,58 @@ I think the biggest things these time series models can tell me is that my custo
 # Quarterly Modeling V2
 
 ```{r}
+plot_data <- BYQUARTER_Customer_No_Retailer %>% 
+  group_by(date) %>% 
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE),
+            totalOrderedCases = sum(orderedCases),
+            totalOrderedGallons = sum(orderedGallons)) %>%  # Aggregate properly
+    pivot_longer(cols = c(totalOrdered, totalOrderedCases, totalOrderedGallons), 
+               names_to = "Metric", values_to = "Value") 
+
 BYQUARTER_Customer_No_Retailer %>% 
   group_by(date) %>% 
-  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE)) %>%  # Aggregate properly
-  ggplot(aes(x = date, y = totalOrdered, group = 1)) +
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE),
+            totalOrderedCases = sum(orderedCases),
+            totalOrderedGallons = sum(orderedGallons)) %>% 
+  ggplot(aes(x = date, y = totalOrdered)) +
   geom_line() +  # Connect points with a line
   geom_point() +  # Show actual data points
   scale_x_date(date_breaks = "1 month", date_labels = "%Y-%m") + 
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M"))+
+  labs(x = NULL, y = NULL, title = "Total Ordered")+
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+  theme( 
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank(), 
+    axis.line = element_line(color = "black"),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA)) 
+
+ggsave("seasonality.png", width = 8, height = 6, dpi = 300)
+
+BYQUARTER_Customer_No_Retailer %>% 
+  group_by(date) %>% 
+  summarize(totalOrdered = sum(totalOrdered, na.rm = TRUE),
+            totalOrderedCases = sum(orderedCases),
+            totalOrderedGallons = sum(orderedGallons)) %>% 
+  ggplot(aes(x = date, y = totalOrderedGallons)) +
+  geom_line() +  # Connect points with a line
+  geom_point() +  # Show actual data points
+  scale_x_date(date_breaks = "1 month", date_labels = "%Y-%m") + 
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M"))+
+  labs(x = NULL, y = NULL, title = "Total Gallons Ordered")+
+  theme_minimal() +
+  theme( 
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank(), 
+    axis.line = element_line(color = "black"),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA)) 
+
+ggsave("seasonalitygallons.png", width = 8, height = 6, dpi = 300)
 ```
+
+
 
 
 ```{r}
@@ -1420,3 +1462,579 @@ summary(QArimaHVLG)
 ```
 
 Another bad arima model go figure
+
+## Multi Level Modeling
+```{r}
+MLM1 <- lmer(total_ordered_2024~ FREQUENT_ORDER_TYPE + COLD_DRINK_CHANNEL+ TRADE_CHANNEL + customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + distance_from_centroid + total_ordered_2023 + (1|Binning_column), data = Annual_Customer_No_Retailer)
+
+#1| means that I expect the predictors to have the same relationship for each group. If I thinkk that it might be different I can put it in that spot instead
+```
+
+```{r}
+summary(MLM1)
+
+AIC(MLM1)
+BIC(MLM1)
+
+#if this is near 0 a MLM model is good. My output shows it is good
+VarCorr(MLM1)
+
+#ICC > 0.1 -> group effects matter and MLM is justified
+#adust IIC is greater the 0.1, but unadjusted is not
+icc(MLM1)
+```
+```{r}
+fixef(MLM1) #population level estimates
+ranef(MLM1)
+```
+the intercepts are not looking good 
+
+## Split into Train and Test
+
+```{r}
+Annual_Customer_No_Retailer$Binning_column <- as.factor(Annual_Customer_No_Retailer$Binning_column)
+
+# Then split into train_setMLM and test_setMLM
+set.seed(123)
+
+# you enter the proportion for the split here. I'd suggest .8
+inTrainMLM <- createDataPartition(Annual_Customer_No_Retailer$total_ordered_2024, p=.75, list=FALSE)
+
+# use the row indexes from line 87 to create the 2 sets.
+# train includes the index, test excludes the index.
+
+train_setMLM <- Annual_Customer_No_Retailer[inTrainMLM,]
+test_setMLM <- Annual_Customer_No_Retailer[-inTrainMLM,]
+
+```
+
+```{r}
+unique(train_setMLM$FREQUENT_ORDER_TYPE)
+```
+
+```{r}
+unique(test_setMLM$FREQUENT_ORDER_TYPE)
+```
+
+
+```{r}
+MLMTrain <- lmer(total_ordered_2024~ FREQUENT_ORDER_TYPE+ COLD_DRINK_CHANNEL+ TRADE_CHANNEL + customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + distance_from_centroid + total_ordered_2023 + (1|Binning_column), data = train_setMLM)
+
+```
+
+```{r}
+summary(MLMTrain)
+```
+```{r}
+test_setMLM$predictions <- predict(MLMTrain, newdata =test_setMLM, allow.new.levels = TRUE)
+```
+
+
+```{r}
+rmse(test_setMLM$total_ordered_2024, test_setMLM$predictions)
+```
+
+```{r}
+rsq <- cor(test_setMLM$total_ordered_2024, test_setMLM$predictions)^2
+
+print(rsq)
+```
+
+```{r}
+
+ggplot(test_setMLM, aes(x = total_ordered_2024, y = predictions)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "Actual vs. Predicted", x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+```
+
+```{r}
+Annual_Customer_No_Retailer2 <- CustomerProfile_Location %>% 
+  left_join(aggregated_cost_wide, by = "CUSTOMER_NUMBER") %>% 
+  mutate(across(c(orderedCases_2023, orderedCases_2024, orderedGallons_2023, orderedGallons_2024), ~ replace_na(.x, 0)),
+         total_ordered = (orderedCases_2024 + orderedGallons_2024 +orderedCases_2023 + orderedGallons_2023),
+         total_ordered_2023 = (orderedCases_2023 + orderedGallons_2023),
+         total_ordered_2024 = (orderedCases_2024 + orderedGallons_2024)) %>% 
+  filter(!(year(FIRST_DELIVERY_DATE) == 2023 & orderedCases_2023 == 0 & orderedGallons_2023 == 0) &
+    !(year(FIRST_DELIVERY_DATE) == 2024 & orderedCases_2024 == 0 & orderedGallons_2024 == 0)) %>% 
+  filter(!(total_ordered_2023 ==0 & total_ordered_2024 == 0))
+
+```
+
+
+```{r}
+Annual_Customer_No_Retailer2 <- Annual_Customer_No_Retailer2 %>% 
+  group_by(Entity_ID) %>% 
+  summarize(FREQUENT_ORDER_TYPE = FREQUENT_ORDER_TYPE[which.max(tabulate(match(FREQUENT_ORDER_TYPE, unique(FREQUENT_ORDER_TYPE))))],
+            COLD_DRINK_CHANNEL = first(COLD_DRINK_CHANNEL),
+            TRADE_CHANNEL = first(TRADE_CHANNEL),
+            SUB_TRADE_CHANNEL = first(SUB_TRADE_CHANNEL),
+            FIRST_DELIVERY_DATE = min(FIRST_DELIVERY_DATE),
+            FIRST_DELIVERY_YEAR = min(FIRST_DELIVERY_YEAR),
+            ON_BOARDING_DATE = min(ON_BOARDING_DATE),
+            ON_BOARDING_YEAR = min(ON_BOARDING_YEAR),
+            customer_age = as.numeric(format(Sys.Date(), "%Y")) - ON_BOARDING_YEAR,
+            numberOfOutlets = sum(case_when(is.na(PRIMARY_GROUP_NUMBER)~ 1,TRUE ~1)),
+            LOCAL_MARKET_PARTNER = LOCAL_MARKET_PARTNER[which.max(tabulate(match(LOCAL_MARKET_PARTNER,unique(LOCAL_MARKET_PARTNER))))],
+            CO2_CUSTOMER =  CO2_CUSTOMER[which.max(tabulate(match(CO2_CUSTOMER, unique(CO2_CUSTOMER))))],
+            
+            hasOrderedCases = as.integer(mean(case_when((orderedCases_2023 + orderedCases_2024)>0 ~1, TRUE ~ 0))>0,1,TRUE~0),
+            
+            propCases = sum(orderedCases_2023, orderedCases_2024)/ sum(total_ordered),
+ 
+            zip_code =  first(ZIP), 
+            
+            city =  first(City),
+
+            state =   
+              first(`State Name`), 
+
+            region = first(cluster),
+             
+            distance_from_centroid = first(distance_to_centroid),
+
+            total_ordered_2023 = case_when(sum(total_ordered_2023)==0~1,TRUE~sum(total_ordered_2023)),
+            total_ordered_2024 = sum(total_ordered_2024),
+            percentChangeYOY = ((total_ordered_2024) - (total_ordered_2023))/(total_ordered_2023)) %>% 
+  mutate(Binning_column = case_when(
+    (total_ordered_2023 < 400 & total_ordered_2024 < 400) & percentChangeYOY < 0.10 ~ "low volume low growth",
+         (total_ordered_2023 < 400 & total_ordered_2024 < 400) & percentChangeYOY >= 0.10 ~ "low volume high growth",
+         (total_ordered_2023 > 400 & total_ordered_2024 > 400) & percentChangeYOY < 0.05 ~ "high volume low growth",
+         (total_ordered_2023 > 400 & total_ordered_2024 > 400) & percentChangeYOY >=0.05 ~ "high volume high growth",
+         (total_ordered_2023 >= 400 | total_ordered_2024 >= 400) & percentChangeYOY > 0 ~ "transtionary growing",
+         (total_ordered_2023 >= 400 | total_ordered_2024 >= 400) & percentChangeYOY <= 0 ~ "transitionary declining" )) %>% 
+  filter(numberOfOutlets == 1) 
+
+```
+
+```{r}
+Annual_Customer_No_Retailer2$Binning_column <- as.factor(Annual_Customer_No_Retailer2$Binning_column)
+
+# Then split into train_setMLM and test_setMLM
+set.seed(123)
+
+# you enter the proportion for the split here. I'd suggest .8
+inTrainMLM2 <- createDataPartition(Annual_Customer_No_Retailer2$total_ordered_2024, p=.7, list=FALSE)
+
+# use the row indexes from line 87 to create the 2 sets.
+# train includes the index, test excludes the index.
+
+train_setMLM2 <- Annual_Customer_No_Retailer2[inTrainMLM2,]
+test_setMLM2 <- Annual_Customer_No_Retailer2[-inTrainMLM2,]
+
+```
+
+
+
+```{r}
+MLMTrain2 <- lmer(total_ordered_2024~  COLD_DRINK_CHANNEL+ TRADE_CHANNEL + customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + distance_from_centroid + total_ordered_2023 + (1|Binning_column), data = train_setMLM2)
+
+```
+
+
+
+```{r}
+test_setMLM2$predictions <- predict(MLMTrain2, newdata =test_setMLM2, allow.new.levels = TRUE)
+```
+
+
+```{r}
+rmse(test_setMLM2$total_ordered_2024, test_setMLM2$predictions)
+```
+rmse barely lower and rsq basically the same with this change
+```{r}
+rsq <- cor(test_setMLM2$total_ordered_2024, test_setMLM2$predictions)^2
+
+print(rsq)
+```
+
+```{r}
+ggplot(test_setMLM2, aes(x = total_ordered_2024, y = predictions)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "Actual vs. Predicted", x = "Actual", y = "Predicted") +
+  theme_minimal()
+```
+
+## MLM with percent change added in
+**The concern with this model is that the bin column is based on the % change YOY, which is a factor of what we are trying to predict. But I will try the model, because we can recommend they replace the % change yoy with CAGR with more data
+
+```{r}
+
+set.seed(123)
+
+# you enter the proportion for the split here. I'd suggest .8
+inTrainMLM3<- createDataPartition(Annual_Customer_No_Retailer2$total_ordered_2024, p=.8, list=FALSE)
+
+# use the row indexes from line 87 to create the 2 sets.
+# train includes the index, test excludes the index.
+
+train_setMLM3 <- Annual_Customer_No_Retailer2[inTrainMLM3,]
+test_setMLM3 <- Annual_Customer_No_Retailer2[-inTrainMLM3,]
+
+```
+
+
+```{r}
+MLMTrain3 <- lmer(total_ordered_2024~customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + distance_from_centroid + total_ordered_2023 + percentChangeYOY +  (1|Binning_column), data = train_setMLM3)
+
+```
+
+$$
+\hat{Y}_{2024Orders} = \beta_0 + \beta_1{customerAge} + \beta_2{LMP} + \beta_3{CO2} + \beta_4{propcases} +  \beta_4{distance} + \beta_4{2023Orders} + \beta_4{YOYDelta} + \beta_5{1|Bin} 
+$$
+
+
+
+
+
+```{r}
+summary(MLMTrain3)
+```
+
+```{r}
+unique(train_setMLM3$Binning_column)
+```
+
+```{r}
+unique(test_setMLM3$Binning_column)
+```
+
+
+
+```{r}
+test_setMLM3$predictions <- predict(MLMTrain3, newdata =test_setMLM3, allow.new.levels = TRUE)
+```
+
+
+```{r}
+rmse(test_setMLM3$total_ordered_2024, test_setMLM3$predictions)
+```
+
+```{r}
+rsq <- cor(test_setMLM3$total_ordered_2024, test_setMLM3$predictions)^2
+
+print(rsq)
+```
+fluctuates between .74 and .83 R2 value based off the train test split. 
+Removed the factor variables and saw no noticable difference
+
+```{r}
+ggplot(test_setMLM3, aes(x = total_ordered_2024, y = predictions)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "Actual vs. Predicted", x = "Actual", y = "Predicted") +
+  scale_y_continuous(labels = label_number(scale = 1e-3, suffix = "K"))+
+  scale_x_continuous(labels = label_number(scale = 1e-3, suffix = "K"))+
+  theme_minimal()+
+   theme( 
+    panel.grid = element_blank(), 
+    axis.line = element_line(color = "black"),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA)) 
+  
+
+ggsave("MLMpredVsActual.png", width = 8, height = 6, dpi = 300)
+```
+
+This model improves slightly. Does seem to be more clustered around the center line. Can we conclude CAGR would be a good metric to add in? I think likely. I am already including order amounts
+
+```{r}
+car::vif(MLMTrain3)
+```
+vif of 5 means there is no signficant multicollinearity.
+
+I guess what this means is that orders and % change are so variable that the bins themselves dont capture the correlation very heavily 
+
+"This means keeping both variables in the model could still be informative—one capturing broad customer segmentation and the other providing a more continuous measure of change. Sounds like a solid approach! Let me know if you need help interpreting the results."
+
+##cross validation instead of train test
+
+```{r}
+# First, ensure all factors have consistent levels throughout your dataset
+factor_vars <- c("FREQUENT_ORDER_TYPE", "COLD_DRINK_CHANNEL", "TRADE_CHANNEL", "Binning_column")
+
+for(var in factor_vars) {
+  if(is.factor(Annual_Customer_No_Retailer2[[var]]) || is.character(Annual_Customer_No_Retailer2[[var]])) {
+    Annual_Customer_No_Retailer2[[var]] <- factor(Annual_Customer_No_Retailer2[[var]])
+    print(paste("Factor", var, "has", length(levels(Annual_Customer_No_Retailer2[[var]])), "levels"))
+  }
+}
+
+# Store original factor levels
+original_levels <- list()
+for(var in factor_vars) {
+  if(is.factor(Annual_Customer_No_Retailer2[[var]])) {
+    original_levels[[var]] <- levels(Annual_Customer_No_Retailer2[[var]])
+  }
+}
+```
+
+
+
+```{r}
+Annual_Customer_No_Retailer2 <- Annual_Customer_No_Retailer2 %>% 
+  filter(Entity_ID != 4445)
+set.seed(1234)
+folds <- createFolds(unique(Annual_Customer_No_Retailer2$total_ordered_2024), k = 5, list = TRUE, returnTrain = FALSE)
+
+# Initialize storage for performance metrics
+cv_rmse <- numeric(length(folds))
+cv_mae <- numeric(length(folds))
+cv_r2 <- numeric(length(folds))
+
+```
+
+
+```{r}
+for(i in seq_along(folds)) {
+  # Create test set indices
+  
+  test_indices <- folds[[i]]
+  
+  # Train and test sets
+  train_data <- Annual_Customer_No_Retailer2[-test_indices, ]
+  test_data <- Annual_Customer_No_Retailer2[test_indices, ]
+  
+  # IMPORTANT: Ensure test data has same factor levels as train data
+  for(var in factor_vars) {
+    if(is.factor(train_data[[var]])) {
+      # Set levels for training data to be all original levels
+      levels(train_data[[var]]) <- original_levels[[var]]
+      
+      # Ensure test data has same levels
+      test_data[[var]] <- factor(test_data[[var]], levels = original_levels[[var]])
+    }
+  }
+  
+  # Fit model - wrapped in tryCatch to handle any remaining errors gracefully
+  mlm_model <- tryCatch({
+    lmer(total_ordered_2024 ~   
+         customer_age + LOCAL_MARKET_PARTNER + 
+         CO2_CUSTOMER + propCases + distance_from_centroid + 
+         total_ordered_2023 + (1|Binning_column), 
+         data = train_data)
+  }, error = function(e) {
+    message("Error in fold ", i, ": ", e$message)
+    return(NULL)
+  })
+  
+  # Skip this fold if model fitting failed
+  if(is.null(mlm_model)) {
+    cv_rmse[i] <- NA
+    cv_mae[i] <- NA
+    next
+  }
+  
+  # Make predictions - with error handling
+  predictions <- tryCatch({
+    predict(mlm_model, newdata = test_data, allow.new.levels = TRUE)
+  }, error = function(e) {
+    message("Prediction error in fold ", i, ": ", e$message)
+    return(NULL)
+  })
+  
+  # Skip metrics calculation if prediction failed
+  if(is.null(predictions)) {
+    cv_rmse[i] <- NA
+    cv_mae[i] <- NA
+    next
+  }
+  
+  # Calculate performance metrics
+  cv_rmse[i] <- sqrt(mean((test_data$total_ordered_2024 - predictions)^2, na.rm = TRUE))
+  cv_mae[i] <- mean(abs(test_data$total_ordered_2024 - predictions), na.rm = TRUE)
+  ss_res <- sum((test_data$total_ordered_2024-predictions)^2, na.rm = TRUE)
+  ss_tot <- sum((test_data$total_ordered_2024-mean(test_data$total_ordered_2024, na.rm = TRUE))^2, na.rm = TRUE)
+  cv_r2[i] <- 1 - (ss_res/ss_tot)
+  
+  cat("Fold", i, "completed. RMSE:", cv_rmse[i], "MAE:", cv_mae[i], "\n")
+}
+
+# Average performance across folds (ignoring NA values)
+mean_rmse <- mean(cv_rmse, na.rm = TRUE)
+
+mean_mae <- mean(cv_mae, na.rm = TRUE)
+mean_r2 <- mean(cv_r2, na.rm = TRUE)
+
+cat("\nCross-validation results:\n")
+cat("Mean RMSE:", mean_rmse, "\n")
+cat("Mean MAE:", mean_mae, "\n")
+cat("Individual fold RMSEs:", cv_rmse, "\n")
+cat("Individual fold RMSEs:", cv_mae, "\n")
+cat("Mean R-squared:", mean_r2, "\n")
+cat("Individual fold R-squareds:", cv_r2, "\n")
+
+
+```
+
+# Examine the data in fold 1
+```{r}
+test_data_fold2 <- Annual_Customer_No_Retailer2[folds[[1]], ]
+
+# Look at the distribution of key variables
+summary(test_data_fold2$total_ordered_2024)
+summary(test_data_fold2$total_ordered_2023)
+table(test_data_fold1$Binning_column)
+```
+```{r}
+# Plot actual vs predicted for fold 1
+predictions <- predict(mlm_model, newdata = test_data_fold2, allow.new.levels = TRUE)
+plot(test_data_fold2$total_ordered_2024, predictions, 
+     main="Fold 1: Actual vs Predicted",
+     xlab="Actual", ylab="Predicted")
+abline(0, 1, col="red")  # Ideal prediction line
+```
+
+```{r}
+errors <- abs(test_data_fold1$total_ordered_2024 - predictions)
+worst_predictions <- order(errors, decreasing=TRUE)[1:5]
+test_data_fold1[worst_predictions, ]
+```
+### The first fold is consistently poor. I wonder if I filter out customers ordering more than 50K gallons if that improves performance?It looks like my outlier driving performance is a customer that ordered 70K in 2024
+
+Wow year filtering out that one customer 4445 improved my model. All folds are now a positve R and the average R2 is 0.77
+
+
+## Predict 2025
+```{r}
+ACNR <- Annual_Customer_No_Retailer2
+
+final_model <- lmer(total_ordered_2024 ~   
+         customer_age + LOCAL_MARKET_PARTNER + 
+         CO2_CUSTOMER + propCases + distance_from_centroid + 
+         total_ordered_2023 + (1|Binning_column), 
+         data = ACNR)
+
+ACNR2025 <- ACNR %>% 
+   mutate(total_ordered_2023 = total_ordered_2024) %>% 
+  select(-total_ordered_2024)
+
+
+ACNR2025$predictions_2025 <- predict(final_model, newdata = ACNR2025)
+
+ACNR2025$predictions_2025 <- ACNR2025$predictions_2025
+```
+
+
+```{r}
+bin_summary <- ACNR2025 %>% 
+  mutate(over_400_in_2025 = predictions_2025 > 400) %>% 
+  group_by(Binning_column) %>% 
+  summarize(
+    total_customers = n(),
+    ccustomers_over_400_2025 = sum(over_400_in_2025, na.rm = TRUE)  )
+
+print(bin_summary)
+```
+I got 44 customers that are now over 400 predicted 
+
+
+
+
+## MLM with customers with less that 400 gallons in 2023
+```{r}
+LessThan400 <- Annual_Customer_No_Retailer2 %>% 
+  filter(total_ordered_2023 <=400)
+set.seed(123)
+
+# you enter the proportion for the split here. I'd suggest .8
+inTrainMLM3<- createDataPartition(LessThan400$total_ordered_2024, p=.8, list=FALSE)
+
+# use the row indexes from line 87 to create the 2 sets.
+# train includes the index, test excludes the index.
+
+train_setMLM3 <- LessThan400[inTrainMLM3,]
+test_setMLM3 <- LessThan400[-inTrainMLM3,]
+
+```
+
+
+```{r}
+MLMTrain3 <- lmer(total_ordered_2024~customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + distance_from_centroid + total_ordered_2023 + percentChangeYOY +  (1|Binning_column), data = train_setMLM3)
+
+```
+
+```{r}
+test_setMLM3$predictions <- predict(MLMTrain3, newdata =test_setMLM3, allow.new.levels = TRUE)
+```
+
+
+```{r}
+rmse(test_setMLM3$total_ordered_2024, test_setMLM3$predictions)
+```
+
+```{r}
+rsq <- cor(test_setMLM3$total_ordered_2024, test_setMLM3$predictions)^2
+
+print(rsq)
+```
+
+
+
+
+
+
+## LMP t-test
+
+
+
+```{r}
+# the "main" data that was used previously : all customer data profile joined with transaction using the Customer Profile Location Data created above.
+
+Customer_Full_Data <- CustomerProfile_Location %>% 
+  left_join(aggregated_cost_wide, by = "CUSTOMER_NUMBER") %>% 
+  mutate(across(c(orderedCases_2023, orderedCases_2024, orderedGallons_2023, orderedGallons_2024), ~ replace_na(.x, 0)),
+         total_ordered = (orderedCases_2024 + orderedGallons_2024 +orderedCases_2023 + orderedGallons_2023),
+         total_ordered_2023 = (orderedCases_2023 + orderedGallons_2023),
+         total_ordered_2024 = (orderedCases_2024 + orderedGallons_2024)) %>% 
+  filter(!(year(FIRST_DELIVERY_DATE) == 2023 & orderedCases_2023 == 0 & orderedGallons_2023 == 0) &
+    !(year(FIRST_DELIVERY_DATE) == 2024 & orderedCases_2024 == 0 & orderedGallons_2024 == 0)) %>% 
+  filter(!(total_ordered_2023 ==0 & total_ordered_2024 == 0))
+
+Customer_Full_Data <- Customer_Full_Data %>%
+  mutate(has_outlet = if_else(!is.na(PRIMARY_GROUP_NUMBER), 1, 0))
+
+outlet_counts <- Customer_Full_Data %>%
+  group_by(Entity_ID) %>%
+  summarise(number_of_outlets = n_distinct(CUSTOMER_NUMBER), .groups = "drop")
+
+Customer_Full_Data <- Customer_Full_Data %>%
+  left_join(outlet_counts, by = "Entity_ID")
+
+
+# this should not have any issues running on the group set as it is using the same defined variables from above. 
+
+Customer_Full_Data <- Customer_Full_Data |>
+  mutate(
+    total_ordered = orderedCases_2023 + orderedGallons_2023 + orderedCases_2024 + orderedGallons_2024,
+    high_order_volume = if_else(total_ordered >= 400, "High", "Low")
+  )
+
+
+```
+
+```{r}
+LMP <- Customer_Full_Data %>% 
+  mutate(LMP_Identifier = case_when((LOCAL_MARKET_PARTNER == 1 & CO2_CUSTOMER == 0 & orderedCases_2023==0 & orderedCases_2024 == 0)~"LMP no C02 Fountain Only",(LOCAL_MARKET_PARTNER == 1 & CO2_CUSTOMER == 0 & orderedCases_2023 >= 1 & orderedCases_2024 >= 1)~"LMP No CO2 Cases and Gallons",(LOCAL_MARKET_PARTNER == 1 & CO2_CUSTOMER == 1)~"LMP CO2", TRUE ~ "Not LMP"))
+
+Customer_Full_Data %>% 
+  filter(CUSTOMER_NUMBER == 500245736)
+```
+
+
+
+```{r}
+group1 <- LMP %>% 
+  filter(LMP_Identifier == "LMP no C02 Fountain Only") %>% 
+  select(total_ordered)
+
+group2 <- LMP %>% 
+  filter(LMP_Identifier == "LMP No CO2 Cases and Gallons") %>% 
+  select(total_ordered)
+
+t.test(group1, group2, var.equal = FALSE)
+```
+LMP's that do not order CO2 and do not order cases show statistical difference when compared to customers that no not order CO2 as well, but do order cases. This group is minimal though. Only 1324 observations
