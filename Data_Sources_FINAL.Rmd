@@ -1739,7 +1739,52 @@ ggplot(test_setMLM3, aes(x = total_ordered_2024, y = predictions)) +
 ggsave("MLMpredVsActual.png", width = 8, height = 6, dpi = 300)
 ```
 
-This model improves slightly. Does seem to be more clustered around the center line. Can we conclude CAGR would be a good metric to add in? I think likely. I am already including order amounts
+This model improves slightly. Does seem to be more clustered around the center line. Can we conclude CAGR would be a good metric to add in? I think likely. I am already including order amounts,
+
+
+```{r}
+ranef_vals <- ranef(MLMTrain3)$Binning_column
+ranef_df <- ranef_vals %>%
+  rownames_to_column("Binning_column") %>%
+  rename(random_intercept = `(Intercept)`)
+
+```
+
+```{r}
+segment_summary <- train_setMLM3 %>%
+  group_by(Binning_column) %>%
+  summarise(
+    n_customers = n(),
+    avg_order_2023 = mean(total_ordered_2023),
+    avg_order_2024 = mean(total_ordered_2024),
+    yoy_change = mean(percentChangeYOY)
+  )
+
+```
+
+
+```{r}
+segment_analysis <- ranef_df %>%
+  left_join(segment_summary, by = "Binning_column")
+
+```
+
+
+```{r}
+ggplot(segment_analysis, aes(x = random_intercept, y = avg_order_2024)) +
+  geom_point() +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  labs(
+    title = "Segment-Level Effects vs. Actual 2024 Performance",
+    x = "Random Intercept (Model-based Deviation from Global Mean)",
+    y = "Average Total Ordered 2024"
+  ) +
+  theme_minimal()
+
+```
+
+
+
 
 ```{r}
 car::vif(MLMTrain3)
@@ -1941,29 +1986,34 @@ LessThan400 <- Annual_Customer_No_Retailer2 %>%
 set.seed(123)
 
 # you enter the proportion for the split here. I'd suggest .8
-inTrainMLM3<- createDataPartition(LessThan400$total_ordered_2024, p=.8, list=FALSE)
+inTrainMLM4<- createDataPartition(LessThan400$total_ordered_2024, p=.8, list=FALSE)
 
 # use the row indexes from line 87 to create the 2 sets.
 # train includes the index, test excludes the index.
 
-train_setMLM3 <- LessThan400[inTrainMLM3,]
-test_setMLM3 <- LessThan400[-inTrainMLM3,]
+train_setMLM4 <- LessThan400[inTrainMLM4,]
+test_setMLM4 <- LessThan400[-inTrainMLM4,]
 
 ```
 
 
 ```{r}
-MLMTrain3 <- lmer(total_ordered_2024~customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + distance_from_centroid + total_ordered_2023 + percentChangeYOY +  (1|Binning_column), data = train_setMLM3)
+MLMTrain3 <- lmer(total_ordered_2024~customer_age + LOCAL_MARKET_PARTNER + CO2_CUSTOMER + propCases + distance_from_centroid + total_ordered_2023 + percentChangeYOY +  (1|Binning_column), data = train_setMLM4)
 
 ```
 
 ```{r}
-test_setMLM3$predictions <- predict(MLMTrain3, newdata =test_setMLM3, allow.new.levels = TRUE)
+summary(MLMTrain4)
 ```
 
 
 ```{r}
-rmse(test_setMLM3$total_ordered_2024, test_setMLM3$predictions)
+test_setMLM4$predictions <- predict(MLMTrain4, newdata =test_setMLM4, allow.new.levels = TRUE)
+```
+
+
+```{r}
+rmse(test_setMLM4$total_ordered_2024, test_setMLM4$predictions)
 ```
 
 ```{r}
@@ -1971,8 +2021,39 @@ rsq <- cor(test_setMLM3$total_ordered_2024, test_setMLM3$predictions)^2
 
 print(rsq)
 ```
+## Predict 2025 with this model
+
+```{r}
+ACNRLessThan400 <- Annual_Customer_No_Retailer2 %>% 
+  filter(total_ordered_2023 <=400)
+
+final_model <- lmer(total_ordered_2024 ~   
+         customer_age + LOCAL_MARKET_PARTNER + 
+         CO2_CUSTOMER + propCases + distance_from_centroid + 
+         total_ordered_2023 + (1|Binning_column), 
+         data = ACNRLessThan400)
+
+ACNR2025400 <- ACNRLessThan400 %>% 
+   mutate(total_ordered_2023 = total_ordered_2024) %>% 
+  select(-total_ordered_2024)
 
 
+ACNR2025400$predictions_2025 <- predict(final_model, newdata = ACNR2025400)
+
+ACNR2025400$predictions_2025 <- ACNR2025400$predictions_2025
+```
+
+
+```{r}
+bin_summary <- ACNR2025400 %>% 
+  mutate(over_400_in_2025 = predictions_2025 > 400) %>% 
+  group_by(Binning_column) %>% 
+  summarize(
+    total_customers = n(),
+    ccustomers_over_400_2025 = sum(over_400_in_2025, na.rm = TRUE)  )
+
+print(bin_summary)
+```
 
 
 
