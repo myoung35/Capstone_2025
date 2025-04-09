@@ -1,0 +1,128 @@
+---
+title: "Imogens EDA additions"
+author: "Imogen Holdsworth"
+date: "2025-04-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+This first one is just a chunk to visualize trade channel by status of over or under in 2023, the data may need to be updated to be either the retailer or non retailer set and update indicator_23 to be the over or under in 2023. (i don't really think it matters if its showing the retailer or non retailer groups )
+
+the finding here was mainly that there are a ton of under threshold customers, but across both groups the distribution of trade channel appears similar, may make it hard to distinguish if one specific trade channel is resulting in higher or lower ordering volumes - top three channels are dining related, which makes sense, 
+
+```{r}
+
+# may need to update this to call the correctly named data,but just a graph to visualize the distribution of trade channel by over/under in 2023 
+
+# Aggregate trade channel counts by threshold indicators
+trade_channel_summary <- modelingData |>
+  group_by(TRADE_CHANNEL, indicator_23) |>
+  summarise(count = n(), .groups = "drop") |>
+  arrange(desc(count))
+
+# Plot Trade Channel Distribution
+ggplot(trade_channel_summary, aes(x = reorder(TRADE_CHANNEL, count), y = count, fill = as.factor(indicator_23))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Trade Channel Distribution by 2023 Threshold Status",
+       x = "Trade Channel",
+       y = "Number of Customers",
+       fill = "Reached 400 Gallons in 2023") +
+  coord_flip() +
+  theme_minimal()
+
+
+```
+
+
+This is a visualization for the distribution of on boarding year across all customers (i think we either do two one for retailer and non retailer groups). The finding you can add here is that the majority of customers to SWIRE seem to be recently on boarded, with about half in the last 4 years, which may make it harder to understanding future volume insights from historical ordering volumes. 
+
+```{r}
+# Convert on boarding date to year
+modelingData <- modelingData %>%
+  mutate(onboarding_year = year(ymd(ON_BOARDING_DATE)))
+
+# Plot On boarding Year Distribution
+ggplot(modelingData, aes(x = onboarding_year)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "white", alpha = 0.7) +
+  labs(title = "Onboarding Year Distribution",
+       x = "Onboarding Year",
+       y = "Number of Customers") +
+  theme_minimal()
+
+```
+
+
+this is a visual for freq net order type breakdown, again need to likely update main data source here but the column names should be good, expect for updating the threshold indicator for 2023. 
+
+main finding, not a ton of distribution across order type, most use sales rep. lots of low volume data makes it hard to distinguish if sales rep really matters at this point, but more over threshold customers did order through a sales rep, but most customers in general order through a sales rep.
+
+```{r}
+# Aggregate frequent order type counts
+order_type_summary <- modelingData |>
+  group_by(FREQUENT_ORDER_TYPE, indicator_23) |>
+  summarise(count = n(), .groups = "drop") |>
+  arrange(desc(count))
+
+# Plot Frequent Order Type Distribution
+ggplot(order_type_summary, aes(x = reorder(FREQUENT_ORDER_TYPE, count), y = count, fill = as.factor(indicator_23))) +
+  geom_bar(stat = "identity", position = "stack") +
+  labs(title = "Frequent Order Type Breakdown",
+       x = "Frequent Order Type",
+       y = "Number of Customers",
+       fill = "Reached 400 Gallons in 2023") +
+  coord_flip() +
+  theme_minimal()
+
+```
+
+
+
+LMP distribution, here we see again a visual of all the below threshold customers, we also see that lmp make up the majority of the data, and there is a closer ratio of over under threshold for customers that are not lmp.
+
+will need to update the data call, and probably the aggregates summary counts for the visual 
+```{r}
+# Aggregate market partner counts
+market_partner_summary <- modelingData |>
+  group_by(LOCAL_MARKET_PARTNER, indicator_23) |>
+  summarise(count = n(), .groups = "drop") |>
+  arrange(desc(count))
+
+# Plot Market Partner Influence
+ggplot(market_partner_summary, aes(x = reorder(LOCAL_MARKET_PARTNER, count), y = count, fill = as.factor(indicator_23))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Market Partner Influence",
+       x = "Market Partner",
+       y = "Number of Customers",
+       fill = "Reached 400 Gallons in 2023") +
+  coord_flip() +
+  theme_minimal()
+
+```
+
+
+
+compare the groups where customers reached or over threshold vs those who did not, will need updated data names, also maybe do one separate fro retail and non retail? this was done on the customer whole data, but i am not sure if we really have a perfect data source for that. 
+
+```{r}
+customer_yearly_order_totals |>
+  group_by(OVER_400_GALLONS) |>
+  summarise(
+    AVG_ORDERED_CASES = mean(ORDERED_CASES),
+    AVG_DELIVERED_CASES = mean(DELIVERED_CASES),
+    AVG_ORDERED_GALLONS = mean(ORDERED_GALLONS),
+    AVG_DELIVERED_GALLONS = mean(DELIVERED_GALLONS),
+    COUNT_CUSTOMERS = n()  # Total customers in each group
+  )
+
+
+```
+
+i think its worth explaining the aggregation and data manipulation we did to get like our final data sources was a huge part of the eda. like through the eda we learned how we wanted to aggregate and join the data, we could share that at the top of the doc or something if it makes sense? I just was reviewing my early eda and now it all seems so silly and not really insightful, but it did bring us to understanding the kind of data structure we would need in order to perform analysis. 
+
+I had a few more random just distribution counts of average order volume across threshold groups and what not, but i think that's already in the main EDA, or could be where the segments are utilized. and also things like just count of customers that order co2 in above or under threshold groups, i also wonder if its worth having a small written section where we explored a few targets, like total threshold over two years at 800  or anything like that? 
+
+
